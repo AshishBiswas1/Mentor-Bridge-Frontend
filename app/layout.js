@@ -1,5 +1,5 @@
-import '@/app/globals.css';
-import { Providers } from '@/app/providers';
+import './globals.css';
+import { Providers } from './providers';
 import { Inter, Poppins } from 'next/font/google';
 
 export const metadata = {

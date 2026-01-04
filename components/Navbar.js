@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 import { Fragment, useEffect, useState } from 'react';
-import { Button } from '@/components/ui/Button';
+import { Button } from './ui/Button';
 import { Dialog, Transition } from '@headlessui/react';
 
 const navLinks = [

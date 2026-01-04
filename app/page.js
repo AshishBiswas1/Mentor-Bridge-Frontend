@@ -1,10 +1,10 @@
-import { CTASection } from '@/components/CTASection';
-import { FeatureSection } from '@/components/FeatureSection';
-import { Footer } from '@/components/Footer';
-import { Hero } from '@/components/Hero';
-import { HowItWorksSection } from '@/components/HowItWorksSection';
-import { Navbar } from '@/components/Navbar';
-import { TestimonialSection } from '@/components/TestimonialSection';
+import { CTASection } from '../components/CTASection';
+import { FeatureSection } from '../components/FeatureSection';
+import { Footer } from '../components/Footer';
+import { Hero } from '../components/Hero';
+import { HowItWorksSection } from '../components/HowItWorksSection';
+import { Navbar } from '../components/Navbar';
+import { TestimonialSection } from '../components/TestimonialSection';
 
 export default function Home() {
   return (
