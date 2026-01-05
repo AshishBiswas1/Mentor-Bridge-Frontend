@@ -70,9 +70,8 @@ export function Hero() {
           <div className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur">
             <div className="absolute inset-x-8 top-0 h-[2px] animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent" />
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-white/70">Upcoming session</p>
                   <p className="font-display text-xl text-white">React Debugging Live</p>
                 </div>
                 <span className="rounded-full bg-accent/20 px-3 py-1 text-xs text-accent">In 2h</span>
@@ -99,9 +98,7 @@ export function Hero() {
                   <span className="font-medium text-white">60 minutes</span>
                 </div>
               </div>
-              <button className="w-full rounded-full bg-primary py-3 text-sm font-semibold text-white shadow-lg shadow-primary/30 transition hover:bg-primary/90">
-                Join waiting room
-              </button>
+              {/* Join waiting room removed per request */}
             </div>
           </div>
         </motion.div>

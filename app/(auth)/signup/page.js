@@ -18,6 +18,7 @@ export default function SignupPage() {
   const [form, setForm] = useState(initialState);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [success, setSuccess] = useState('');
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -36,7 +37,9 @@ export default function SignupPage() {
       return;
     }
 
-    router.replace('/');
+    // On successful signup, show confirmation message and do NOT redirect.
+    setSuccess('A confirmation link has been sent to your email. Confirm your email and then log in.');
+    setIsSubmitting(false);
   };
 
   return (
@@ -54,7 +57,19 @@ export default function SignupPage() {
           </Link>
         </p>
       </div>
-      <form onSubmit={handleSubmit} className="mt-8 space-y-6">
+      {success ? (
+        <div className="mt-8 rounded-2xl border border-accent/30 bg-accent/5 p-6 text-sm text-accent">
+          <p className="mb-4">{success}</p>
+          <p>
+            After confirming your email, you can{' '}
+            <Link href="/login" className="text-primary hover:text-primary/80">
+              log in
+            </Link>
+            .
+          </p>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="mt-8 space-y-6">
         <div className="space-y-2">
           <label htmlFor="name" className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60">
             Name
@@ -116,7 +131,8 @@ export default function SignupPage() {
         >
           {isSubmitting ? 'Creating account…' : 'Sign up and continue'}
         </button>
-      </form>
+        </form>
+      )}
     </motion.div>
   );
 }
