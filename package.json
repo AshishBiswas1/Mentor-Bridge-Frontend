@@ -1,0 +1,27 @@
+{
+  "name": "mentor-bridge-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@headlessui/react": "^1.7.18",
+    "@heroicons/react": "^2.1.5",
+    "clsx": "^2.1.0",
+    "framer-motion": "^10.18.0",
+    "next": "14.1.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.55.0",
+    "eslint-config-next": "14.1.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.1"
+  }
+}
