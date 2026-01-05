@@ -28,14 +28,14 @@ export default function LoginPage() {
     setIsSubmitting(true);
     setError('');
 
-    const result = login(form.email, form.password);
+    const result = await login(form.email, form.password);
     if (!result.success) {
       setError(result.message);
       setIsSubmitting(false);
       return;
     }
 
-    router.replace('/dashboard');
+    router.replace('/');
   };
 
   return (

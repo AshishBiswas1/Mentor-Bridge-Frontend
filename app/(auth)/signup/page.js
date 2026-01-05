@@ -29,14 +29,14 @@ export default function SignupPage() {
     setIsSubmitting(true);
     setError('');
 
-    const result = signup(form);
+    const result = await signup(form);
     if (!result.success) {
       setError(result.message);
       setIsSubmitting(false);
       return;
     }
 
-    router.replace('/dashboard');
+    router.replace('/');
   };
 
   return (
