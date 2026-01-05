@@ -9,11 +9,10 @@ A Next.js 14 landing and authentication experience for a 1-on-1 mentor–student
 
 ### Key features
 - Responsive landing page with animated hero, feature highlights, success stories, and a clear CTA.
-- Auth flow with signup, login, dashboard, add-person, and logout screens using mock state management.
-- Dashboard stores session data locally, keeping mentee lists per device.
+- Auth flow with signup, login, add-person, and logout screens using mock state management.
 
 ### Project structure
-- app/ – Next.js routes, including grouped auth pages and dashboard.
+- app/ – Next.js routes, including grouped auth pages.
 - components/ – Reusable UI and layout building blocks.
 - lib/ – Shared utilities (auth provider currently lives in components for client context).
 

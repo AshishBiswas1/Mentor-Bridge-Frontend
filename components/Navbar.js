@@ -1,11 +1,12 @@
-'use client';
+"use client";
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 import { Fragment, useEffect, useState } from 'react';
 import { Button } from './ui/Button';
 import { Dialog, Transition } from '@headlessui/react';
+import { useAuth } from './AuthProvider';
 
 const navLinks = [
   { href: '#features', label: 'Features' },
@@ -29,6 +30,17 @@ export function Navbar() {
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
+
+  const { user, logout } = useAuth();
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      router.replace('/');
+    }
+  };
 
   return (
     <header
@@ -56,10 +68,21 @@ export function Navbar() {
           ))}
         </div>
         <div className="hidden items-center gap-4 md:flex">
-          <Button href="/login" variant="ghost">
-            Log in
-          </Button>
-          <Button href="/signup">Start free trial</Button>
+          {user ? (
+            <>
+              <div className="text-sm text-slate-200">{user.name ? `Hi, ${user.name.split(' ')[0]}` : user.email}</div>
+              <Button as="button" variant="ghost" onClick={handleLogout}>
+                Log out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button href="/login" variant="ghost">
+                Log in
+              </Button>
+              <Button href="/signup">Start free trial</Button>
+            </>
+          )}
         </div>
         <button className="md:hidden" aria-label="Open menu" onClick={() => setMobileOpen(true)}>
           <Bars3Icon className="h-7 w-7 text-slate-100" />
@@ -102,12 +125,23 @@ export function Navbar() {
                   </a>
                 ))}
                 <div className="mt-6 grid gap-3">
-                  <Button href="/login" variant="ghost" className="w-full justify-center">
-                    Log in
-                  </Button>
-                  <Button href="/signup" className="w-full justify-center">
-                    Start free trial
-                  </Button>
+                  {user ? (
+                    <>
+                      <div className="px-3 py-2 text-sm text-slate-100">{user.name ? `Hi, ${user.name.split(' ')[0]}` : user.email}</div>
+                      <Button as="button" variant="ghost" className="w-full justify-center" onClick={() => { handleLogout(); setMobileOpen(false); }}>
+                        Log out
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button href="/login" variant="ghost" className="w-full justify-center">
+                        Log in
+                      </Button>
+                      <Button href="/signup" className="w-full justify-center">
+                        Start free trial
+                      </Button>
+                    </>
+                  )}
                 </div>
               </nav>
             </Dialog.Panel>
