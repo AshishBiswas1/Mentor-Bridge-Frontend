@@ -9,15 +9,66 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = window.localStorage.getItem('mentor-bridge-session');
-        setUser(stored ? JSON.parse(stored) : null);
-      } catch (e) {
-        setUser(null);
+    let mounted = true;
+    (async function init() {
+      if (typeof window === 'undefined') {
+        if (mounted) setLoading(false);
+        return;
       }
-    }
-    setLoading(false);
+
+      try {
+        const storedRaw = window.localStorage.getItem('mentor-bridge-session');
+        if (!storedRaw) {
+          if (mounted) setUser(null);
+          return;
+        }
+
+        const parsed = JSON.parse(storedRaw);
+        const token = parsed?.token;
+
+        // Only accept and set a stored session if we can verify it with /user/me
+        if (token) {
+          const base = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+          try {
+            const meRes = await fetch(`${base}/user/me`, {
+              method: 'GET',
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const meJson = await meRes.json().catch(() => null);
+            if (meRes.ok && meJson) {
+              // backend may return data as array
+              const mdata = meJson?.data;
+              const finalUser = Array.isArray(mdata) && mdata.length > 0 ? mdata[0] : mdata || meJson?.user || null;
+              if (finalUser && mounted) {
+                // persist canonical user (keeps token)
+                finalUser.token = token;
+                persistSession(finalUser);
+              }
+            } else {
+              // invalid token — clear local session
+              window.localStorage.removeItem('mentor-bridge-session');
+              if (mounted) setUser(null);
+            }
+          } catch (e) {
+            // network error — clear client session to avoid showing logged-in state
+            window.localStorage.removeItem('mentor-bridge-session');
+            if (mounted) setUser(null);
+          }
+        } else {
+          // No token: do not consider this an authenticated session
+          window.localStorage.removeItem('mentor-bridge-session');
+          if (mounted) setUser(null);
+        }
+      } catch (e) {
+        if (mounted) setUser(null);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const persistSession = (session) => {
