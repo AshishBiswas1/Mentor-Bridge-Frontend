@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -13,7 +13,43 @@ const initialState = {
 export default function ResetPasswordPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const token = searchParams.get('token');
+  const initialToken = searchParams.get('token') || searchParams.get('access_token') || searchParams.get('accessToken');
+  const [token, setToken] = useState(initialToken);
+  const [tokenChecked, setTokenChecked] = useState(Boolean(initialToken));
+
+  useEffect(() => {
+    // If token not present in query params, try to read it from the URL fragment (#...)
+    if (token) return;
+    if (typeof window === 'undefined') {
+      setTokenChecked(true);
+      return;
+    }
+
+    const hash = window.location.hash || '';
+    if (!hash) {
+      setTokenChecked(true);
+      return;
+    }
+
+    try {
+      const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+      const t = params.get('access_token') || params.get('token') || params.get('accessToken');
+      if (t) {
+        setToken(t);
+        // remove hash from URL to keep it clean
+        try {
+          const newUrl = window.location.pathname + window.location.search;
+          window.history.replaceState({}, document.title, newUrl);
+        } catch (e) {
+          // ignore
+        }
+      }
+    } catch (e) {
+      // ignore parse errors
+    } finally {
+      setTokenChecked(true);
+    }
+  }, [token]);
   
   const [form, setForm] = useState(initialState);
   const [error, setError] = useState('');
@@ -68,15 +104,26 @@ export default function ResetPasswordPage() {
     
     setValidationErrors({});
 
+    if (!token) {
+      setError('Missing or invalid reset token.');
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
-      // Simulate API call for password reset
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      
-      // In a real app, you'd call your password reset API here with the token and new password
-      // For demo purposes, we'll skip token validation
-      
-      // For now, we'll always show success
-      setSuccess(true);
+      const base = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+      const res = await fetch(`${base}/user/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_token: token, newPassword: form.password }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(json?.error || json?.message || 'Failed to reset password.');
+      } else {
+        setSuccess(true);
+      }
     } catch (err) {
       setError('Failed to reset password. Please try again.');
     } finally {
@@ -84,10 +131,8 @@ export default function ResetPasswordPage() {
     }
   };
 
-  // Show error if no token is present (optional - for production use)
-  // Commented out for demo purposes to allow testing without token
-  /*
-  if (!token) {
+  // If token is missing after we've checked both query and fragment, show invalid-link message
+  if (!token && tokenChecked) {
     return (
       <motion.div
         initial={{ opacity: 0, y: 18 }}
@@ -122,7 +167,6 @@ export default function ResetPasswordPage() {
       </motion.div>
     );
   }
-  */
 
   if (success) {
     return (
