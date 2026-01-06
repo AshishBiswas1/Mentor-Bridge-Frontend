@@ -6,11 +6,12 @@ and students to collaborate effectively through live video communication, real-t
 shared code editing within a controlled session-based environment.
 
 ## Collaboration tools using modern full-stack technologies
-1. Next.js - Frontend
+1. Next.js  - Frontend
 2. Tailwindcss - Designing
 3. Node.js, Express.js - Backend
-4. WebRtc + Socket.io - Video Calls
-5. Supabase - Database
+4. WebRTC → media transmission (audio/video)
+5. Socket.io → signaling + real-time messaging
+6. Supabase - Database
 
 ## Architecture Design
 ![Architecture Diagram](./architecture.png)
@@ -31,7 +32,7 @@ shared code editing within a controlled session-based environment.
 	III. Support for Python.
 
 4. Messaging System:
-	I. Session-based Chat (Socket.io).
+	Session-based Chat (Socket.io).
 
 5. Session Management:
 	I. Create Sessions (Mentor) and Join sessions via link (Student).
