@@ -58,5 +58,3 @@ shared code editing within a controlled session-based environment.
 - `app/` – Next.js routes, including grouped auth pages.
 - `components/` – Reusable UI and layout building blocks.
 - `util/` – Backend utilities (Supabase clients, helpers).
-
-If you want the diagram placed elsewhere or need a different image format, tell me where to move it.
