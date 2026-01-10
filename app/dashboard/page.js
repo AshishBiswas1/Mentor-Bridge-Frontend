@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeftOnRectangleIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftOnRectangleIcon, PlusIcon, CodeBracketIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
 
 const initialConnection = {
@@ -72,6 +72,10 @@ export default function DashboardPage() {
     router.replace('/login');
   };
 
+  const startSession = () => {
+    router.push('/session');
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-10 text-slate-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-10">
@@ -83,13 +87,22 @@ export default function DashboardPage() {
               Here is a snapshot of your mentorship journey. Keep the momentum going by inviting collaborators and tracking your sessions below.
             </p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="group flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary/40 hover:bg-primary/20"
-          >
-            <ArrowLeftOnRectangleIcon className="h-5 w-5 text-primary transition group-hover:translate-x-0.5" />
-            Log out
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={startSession}
+              className="group flex items-center gap-2 self-start rounded-full border border-primary/40 bg-primary/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:bg-primary/30"
+            >
+              <CodeBracketIcon className="h-5 w-5 text-primary transition group-hover:scale-110" />
+              New Session
+            </button>
+            <button
+              onClick={handleLogout}
+              className="group flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary/40 hover:bg-primary/20"
+            >
+              <ArrowLeftOnRectangleIcon className="h-5 w-5 text-primary transition group-hover:translate-x-0.5" />
+              Log out
+            </button>
+          </div>
         </header>
         <section className="grid gap-6 md:grid-cols-[2fr,3fr]">
           <motion.div
