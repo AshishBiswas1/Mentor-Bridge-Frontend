@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 
 const initialState = {
@@ -12,19 +12,31 @@ const initialState = {
 
 export default function ResetPasswordPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const initialToken = searchParams.get('token') || searchParams.get('access_token') || searchParams.get('accessToken');
-  const [token, setToken] = useState(initialToken);
-  const [tokenChecked, setTokenChecked] = useState(Boolean(initialToken));
+  const [token, setToken] = useState(null);
+  const [tokenChecked, setTokenChecked] = useState(false);
 
   useEffect(() => {
-    // If token not present in query params, try to read it from the URL fragment (#...)
+    // Read token from query string or URL fragment (#...) on client mount
     if (token) return;
     if (typeof window === 'undefined') {
       setTokenChecked(true);
       return;
     }
 
+    // Try query params first
+    try {
+      const qp = new URLSearchParams(window.location.search || '');
+      const t = qp.get('access_token') || qp.get('token') || qp.get('accessToken');
+      if (t) {
+        setToken(t);
+        setTokenChecked(true);
+        return;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Fallback: try hash fragment (some providers return token in fragment)
     const hash = window.location.hash || '';
     if (!hash) {
       setTokenChecked(true);
