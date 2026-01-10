@@ -44,6 +44,14 @@ export default function LoginPage() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.45, ease: 'easeOut' }}
     >
+      <div className="mb-6">
+        <Link href="/" className="inline-flex items-center text-sm text-slate-300 hover:text-white">
+          <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to home
+        </Link>
+      </div>
       <div className="space-y-6 text-center">
         <h1 className="font-display text-3xl text-white">Welcome back</h1>
         <p className="text-sm text-slate-300">
