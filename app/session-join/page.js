@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 
-export default function SessionJoinPage() {
+function SessionJoinContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [name, setName] = useState('');
@@ -162,3 +162,10 @@ export default function SessionJoinPage() {
   );
 }
 
+export default function SessionJoinPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 flex items-center justify-center"><div className="text-white">Loading...</div></div>}>
+      <SessionJoinContent />
+    </Suspense>
+  );
+}

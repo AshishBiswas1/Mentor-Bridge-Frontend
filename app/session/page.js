@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
 // The editor language is fixed to Python for sessions
 
-export default function SessionPage() {
+function SessionPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const link = searchParams.get('link');
@@ -1068,5 +1068,13 @@ export default function SessionPage() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function SessionPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 flex items-center justify-center"><div className="text-white">Loading session...</div></div>}>
+      <SessionPageContent />
+    </Suspense>
   );
 }
