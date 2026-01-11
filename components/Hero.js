@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { Button } from './ui/Button';
+import { useAuth } from './AuthProvider';
 
 const container = {
   hidden: { opacity: 0 },
@@ -44,7 +45,12 @@ export function Hero() {
             Mentor Bridge pairs ambitious students with world-class developers for live, guided sessions that accelerate skill growth and confidence.
           </motion.p>
           <motion.div variants={item} className="flex flex-col gap-3 sm:flex-row">
-            <Button href="/signup">Start free trial</Button>
+            {(() => {
+              const { user } = useAuth() || {};
+              const btnLabel = user ? 'Dashboard' : 'Start free trial';
+              const btnHref = user ? '/dashboard' : '/signup';
+              return <Button href={btnHref}>{btnLabel}</Button>;
+            })()}
             <Button href="#features" variant="secondary">
               Explore features
             </Button>

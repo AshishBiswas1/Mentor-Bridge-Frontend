@@ -3,21 +3,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeftOnRectangleIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { 
+  ArrowLeftOnRectangleIcon, 
+  CodeBracketIcon,
+  CalendarDaysIcon,
+  ClockIcon,
+  CheckCircleIcon,
+} from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
 
-const initialConnection = {
-  name: '',
-  email: '',
-  goal: '',
-};
+const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading, logout, addConnection } = useAuth();
-  const [connection, setConnection] = useState(initialConnection);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const { user, loading, logout } = useAuth();
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  
+
+  // Session lists are empty by default — populate from backend/live session data
+  const [activeSessions, setActiveSessions] = useState([]);
+  const [completedSessions, setCompletedSessions] = useState([]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -25,7 +33,84 @@ export default function DashboardPage() {
     }
   }, [loading, user, router]);
 
-  const connectionCount = useMemo(() => user?.connections?.length ?? 0, [user]);
+  const mentorshipStats = useMemo(() => {
+    const activeCount = activeSessions.length;
+    const completedCount = completedSessions.length;
+    return { activeCount, completedCount };
+  }, [activeSessions, completedSessions]);
+
+  // Fetch mentor sessions (protected) and split into active/pending and completed
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const token = user?.token;
+        const res = await fetch(`${BASE}/session/mentor`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        const json = await res.json().catch(() => null);
+        if (!mounted) return;
+        if (!res.ok) {
+          // fallback: clear lists
+          setActiveSessions([]);
+          setCompletedSessions([]);
+          return;
+        }
+
+        const sessions = (json && (json.data || json)) || [];
+        // Normalize server session shape to UI session shape
+        const normalized = (Array.isArray(sessions) ? sessions : []).map((s) => {
+          // s expected: { id, link, status, started_at, ended_at, session_name }
+          const started = s.started_at ? new Date(s.started_at) : null;
+          const ended = s.ended_at ? new Date(s.ended_at) : null;
+          const duration = started && ended ? (() => {
+            const secs = Math.max(0, Math.floor((ended - started) / 1000));
+            const mins = Math.floor(secs / 60);
+            const remSecs = secs % 60;
+            return `${mins}m ${remSecs}s`;
+          })() : (started ? 'Scheduled' : '—');
+
+          const startTime = started ? started.toLocaleString() : 'TBD';
+
+          return {
+            id: s.id,
+            link: s.link,
+            status: s.status || 'unknown',
+            mentee: s.session_name || s.link || 'Session',
+            topic: s.session_name || '',
+            startTime,
+            duration,
+            progress: s.progress || 0,
+            nextMilestone: s.nextMilestone || '',
+            rating: s.rating || 0,
+            completedDate: s.ended_at || null,
+            outcome: s.outcome || '',
+          };
+        });
+        if (!Array.isArray(sessions)) {
+          setActiveSessions([]);
+          setCompletedSessions([]);
+          return;
+        }
+
+        const completed = normalized.filter((s) => String(s.status).toLowerCase() === 'ended');
+        const active = normalized.filter((s) => String(s.status).toLowerCase() !== 'ended');
+
+        setActiveSessions(active);
+        setCompletedSessions(completed);
+      } catch (e) {
+        setActiveSessions([]);
+        setCompletedSessions([]);
+      }
+    };
+
+    if (!loading && user) load();
+    return () => { mounted = false; };
+  }, [loading, user]);
 
   if (loading || !user) {
     return (
@@ -42,34 +127,52 @@ export default function DashboardPage() {
     );
   }
 
-  const handleChange = (event) => {
-    const { name, value } = event.target;
-    setConnection((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleAddConnection = (event) => {
-    event.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (!connection.name || !connection.email) {
-      setError('Please provide a name and email.');
-      return;
-    }
-
-    const result = addConnection(connection);
-    if (!result.success) {
-      setError(result.message || 'Could not add person.');
-      return;
-    }
-
-    setSuccess('Person added to your mentorship circle.');
-    setConnection(initialConnection);
-  };
+  
 
   const handleLogout = () => {
     logout();
     router.replace('/login');
+  };
+
+  const startSession = () => {
+    // open create session modal for mentor
+    setShowCreateModal(true);
+  };
+
+  const joinSession = (sessionId) => {
+    // prefer link-based navigation if possible
+    if (!sessionId) return;
+    router.push(`/session?link=${encodeURIComponent(sessionId)}`);
+  };
+
+  const rejoinSession = async (session) => {
+    try {
+      const token = user?.token;
+      if (!token) {
+        alert('Authentication required to rejoin session');
+        return;
+      }
+      const link = session.link || session.id;
+      const res = await fetch(`${BASE}/session/mentor-join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ link }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = json?.message || 'Failed to rejoin session';
+        alert(msg);
+        return;
+      }
+
+      // Navigate to session by link
+      router.push(`/session?link=${encodeURIComponent(link)}`);
+    } catch (e) {
+      alert(e?.message || 'Network error while rejoining session');
+    }
   };
 
   return (
@@ -77,169 +180,358 @@ export default function DashboardPage() {
       <div className="mx-auto flex max-w-6xl flex-col gap-10">
         <header className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-white/50">Dashboard</p>
+            <p className="text-sm uppercase tracking-[0.3em] text-white/50">Mentor Dashboard</p>
             <h1 className="mt-3 font-display text-4xl text-white">Welcome back, {user.name.split(' ')[0]}.</h1>
             <p className="mt-2 max-w-xl text-sm text-slate-300">
-              Here is a snapshot of your mentorship journey. Keep the momentum going by inviting collaborators and tracking your sessions below.
+              Manage your mentorship sessions, track progress with your mentees, and guide them towards their coding goals.
             </p>
           </div>
-          <button
-            onClick={handleLogout}
-            className="group flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary/40 hover:bg-primary/20"
-          >
-            <ArrowLeftOnRectangleIcon className="h-5 w-5 text-primary transition group-hover:translate-x-0.5" />
-            Log out
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={startSession}
+              className="group flex items-center gap-2 self-start rounded-full border border-primary/40 bg-primary/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:bg-primary/30"
+            >
+              <CodeBracketIcon className="h-5 w-5 text-primary transition group-hover:scale-110" />
+              New Session
+            </button>
+            <button
+              onClick={handleLogout}
+              className="group flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary/40 hover:bg-primary/20"
+            >
+              <ArrowLeftOnRectangleIcon className="h-5 w-5 text-primary transition group-hover:translate-x-0.5" />
+              Log out
+            </button>
+          </div>
         </header>
-        <section className="grid gap-6 md:grid-cols-[2fr,3fr]">
+
+        {/* Create Session Modal */}
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-white mb-2">Create New Session</h3>
+              <p className="text-sm text-slate-400 mb-4">Enter a name or topic for this collaborative session.</p>
+
+              <label className="block text-sm text-slate-300 mb-2">Session name</label>
+              <input
+                value={newSessionName}
+                onChange={(e) => setNewSessionName(e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 mb-4"
+                placeholder="E.g. Python debugging with Alice"
+              />
+
+              {createError && <p className="text-xs text-red-400 mb-2">{createError}</p>}
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    setCreateError('');
+                    if (!newSessionName || newSessionName.trim().length < 3) {
+                      setCreateError('Please enter a session name (3+ characters).');
+                      return;
+                    }
+                    setCreating(true);
+                    try {
+                      const token = user?.token;
+                      const res = await fetch(`${BASE}/session/create`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ name: newSessionName.trim() }),
+                      });
+                      const json = await res.json().catch(() => null);
+                      if (!res.ok) {
+                        setCreateError(json?.message || 'Failed to create session');
+                        setCreating(false);
+                        return;
+                      }
+
+                      // backend may return session in json.data or json.session
+                      const s = json?.data || json?.session || json;
+                      // try to resolve a link or id to navigate
+                      const link = s?.link || s?.id || (Array.isArray(s) && s[0]?.link) || null;
+                      setShowCreateModal(false);
+                      setNewSessionName('');
+                      setCreating(false);
+                      if (link) {
+                        router.push(`/session?link=${encodeURIComponent(link)}`);
+                      } else {
+                        // fallback: open generic session route
+                        router.push('/session');
+                      }
+                    } catch (e) {
+                      setCreateError(e?.message || 'Network error');
+                      setCreating(false);
+                    }
+                  }}
+                  disabled={creating}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {creating ? 'Creating…' : 'Create Session'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mentor Stats Overview */}
+        <section className="grid gap-6 md:grid-cols-2">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: 'easeOut' }}
-            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
+            transition={{ delay: 0.05, duration: 0.4, ease: 'easeOut' }}
+            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-xl backdrop-blur"
           >
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.4em] text-white/60">Profile</p>
-                <h2 className="mt-3 font-display text-2xl text-white">{user.name}</h2>
-                <p className="mt-1 text-sm text-slate-300">{user.email}</p>
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-accent/10 p-2">
+                <ClockIcon className="h-5 w-5 text-accent" />
               </div>
-              <div className="rounded-3xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">
-                {connectionCount} mentee{connectionCount === 1 ? '' : 's'}
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-white/60">Active Sessions</p>
+                <p className="text-2xl font-bold text-white">{mentorshipStats.activeCount}</p>
               </div>
             </div>
-            <dl className="mt-8 grid grid-cols-2 gap-4 text-sm text-slate-300">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                <dt className="text-xs uppercase tracking-[0.3em] text-white/50">Member since</dt>
-                <dd className="mt-2 font-medium text-white">
-                  {new Date(user.createdAt || Date.now()).toLocaleDateString()}
-                </dd>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                <dt className="text-xs uppercase tracking-[0.3em] text-white/50">Last session</dt>
-                <dd className="mt-2 font-medium text-white">This week</dd>
-              </div>
-            </dl>
           </motion.div>
+
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1, duration: 0.4, ease: 'easeOut' }}
-            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
+            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-xl backdrop-blur"
           >
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-                <PlusIcon className="h-6 w-6 text-primary" />
+              <div className="rounded-xl bg-green-500/10 p-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-400" />
               </div>
               <div>
-                <h2 className="font-display text-xl text-white">Add a mentee or collaborator</h2>
-                <p className="text-sm text-slate-300">
-                  Keep track of the people you are supporting. We will store them locally for quick access.
-                </p>
+                <p className="text-xs uppercase tracking-[0.3em] text-white/60">Completed</p>
+                <p className="text-2xl font-bold text-white">{mentorshipStats.completedCount}</p>
               </div>
             </div>
-            <form onSubmit={handleAddConnection} className="mt-6 space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-name">
-                    Name
-                  </label>
-                  <input
-                    id="connection-name"
-                    name="name"
-                    value={connection.name}
-                    onChange={handleChange}
-                    placeholder="Jamie Chen"
-                    className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-email">
-                    Email
-                  </label>
-                  <input
-                    id="connection-email"
-                    name="email"
-                    type="email"
-                    value={connection.email}
-                    onChange={handleChange}
-                    placeholder="jamie@build.dev"
-                    className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-goal">
-                  Focus area
-                </label>
-                <textarea
-                  id="connection-goal"
-                  name="goal"
-                  rows={3}
-                  value={connection.goal}
-                  onChange={handleChange}
-                  placeholder="Set up their TypeScript tooling and CI/CD pipeline."
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              {error && (
-                <p className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
-                  {error}
-                </p>
-              )}
-              {success && (
-                <p className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-accent">
-                  {success}
-                </p>
-              )}
-              <button
-                type="submit"
-                className="w-full rounded-full bg-primary py-3 text-sm font-semibold text-white shadow-lg shadow-primary/30 transition hover:bg-primary/90"
-              >
-                Add person
-              </button>
-            </form>
           </motion.div>
         </section>
+
+        {/* Active Sessions */}
+        <section className="grid gap-6">
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2, duration: 0.4, ease: 'easeOut' }}
+            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="font-display text-xl text-white flex items-center gap-2">
+                  <ClockIcon className="h-5 w-5 text-accent" />
+                  Active Sessions
+                </h2>
+                <p className="text-sm text-slate-300">
+                  Ongoing and scheduled mentorship sessions
+                </p>
+              </div>
+              <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent">
+                {activeSessions.length} active
+              </span>
+            </div>
+            
+            <div className="space-y-4">
+              {activeSessions.map((session) => (
+                <div
+                  key={session.id}
+                  className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 hover:border-primary/30 hover:bg-slate-950/80 transition-colors"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="font-display text-lg text-white">{session.mentee}</h3>
+                      <p className="text-sm text-slate-300">{session.topic}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* Status hidden per UI requirement: show active & pending without status labels */}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4 mb-3 text-sm text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <CalendarDaysIcon className="h-4 w-4" />
+                      <span>{session.startTime}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <ClockIcon className="h-4 w-4" />
+                      <span>{session.duration}</span>
+                    </div>
+                  </div>
+
+                  {session.progress > 0 && (
+                    <div className="mb-3">
+                      <div className="flex justify-between text-xs text-slate-400 mb-1">
+                        <span>Progress</span>
+                        <span>{session.progress}%</span>
+                      </div>
+                      <div className="w-full bg-slate-800 rounded-full h-2">
+                        <div 
+                          className="bg-primary h-2 rounded-full transition-all duration-300" 
+                          style={{ width: `${session.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-slate-400">Next: {session.nextMilestone}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => joinSession(session.link || session.id)}
+                        className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
+                      >
+                        Open Session
+                      </button>
+                      <button
+                        onClick={() => rejoinSession(session)}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
+                      >
+                        Rejoin
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {activeSessions.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-white/20 bg-white/[0.02] p-6 text-center">
+                  <ClockIcon className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                  <p className="text-sm text-slate-300 mb-2">No active sessions</p>
+                  <p className="text-xs text-slate-400">Schedule a session or start mentoring someone new.</p>
+                </div>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Quick Actions removed */}
+        </section>
+
+        {/* Completed & Ending Sessions */}
         <motion.section
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15, duration: 0.45, ease: 'easeOut' }}
+          transition={{ delay: 0.3, duration: 0.45, ease: 'easeOut' }}
           className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="font-display text-xl text-white">Mentorship circle</h2>
+              <h2 className="font-display text-xl text-white flex items-center gap-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-400" />
+                Completed Sessions
+              </h2>
               <p className="text-sm text-slate-300">
-                Track who you are mentoring or learning with. Stored locally on this device.
+                Recent mentorship sessions that have been completed
               </p>
             </div>
             <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs text-white/70">
-              {connectionCount} total
+              {completedSessions.length} completed
             </span>
           </div>
-          <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {user.connections && user.connections.length > 0 ? (
-              user.connections.map((person) => (
+          
+          <div className="grid gap-4 md:grid-cols-2">
+            {completedSessions.map((session) => (
+              <div
+                key={session.id}
+                className="rounded-2xl border border-white/10 bg-slate-950/60 p-4"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="font-display text-lg text-white">{session.mentee}</h3>
+                    <p className="text-sm text-slate-300">{session.topic}</p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {[...Array(5)].map((_, i) => (
+                      <span
+                        key={i}
+                        className={`text-xs ${i < session.rating ? 'text-yellow-400' : 'text-slate-600'}`}
+                      >
+                        ★
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="space-y-2 text-sm text-slate-400 mb-3">
+                  <div className="flex items-center gap-2">
+                    <CalendarDaysIcon className="h-4 w-4" />
+                    <span>Completed {new Date(session.completedDate).toLocaleDateString()}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <ClockIcon className="h-4 w-4" />
+                    <span>Duration: {session.duration}</span>
+                  </div>
+                </div>
+
+                <p className="text-sm text-slate-300 bg-slate-950/60 rounded-lg p-3 border border-white/10">
+                  <span className="text-accent font-medium">Outcome:</span> {session.outcome}
+                </p>
+              </div>
+            ))}
+
+            {completedSessions.length === 0 && (
+              <div className="col-span-2 rounded-2xl border border-dashed border-white/20 bg-white/[0.02] p-6 text-center">
+                <CheckCircleIcon className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                <p className="text-sm text-slate-300 mb-2">No completed sessions yet</p>
+                <p className="text-xs text-slate-400">Your completed mentorship sessions will appear here.</p>
+              </div>
+            )}
+          </div>
+        </motion.section>
+        
+        {/* Legacy Connections (if any exist) */}
+        {user.connections && user.connections.length > 0 && (
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.35, duration: 0.45, ease: 'easeOut' }}
+            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="font-display text-xl text-white">Your Mentees</h2>
+                <p className="text-sm text-slate-300">People you are currently mentoring</p>
+              </div>
+              <span className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs text-white/70">
+                {user.connections.length} mentee{user.connections.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {user.connections.map((person) => (
                 <div
                   key={person.id}
                   className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-sm text-slate-200"
                 >
                   <h3 className="font-display text-lg text-white">{person.name}</h3>
-                  <p className="text-xs text-slate-400">{person.email}</p>
-                  {person.goal && <p className="mt-3 text-sm text-slate-300">{person.goal}</p>}
-                  <p className="mt-4 text-xs uppercase tracking-[0.3em] text-white/40">
-                    Added {new Date(person.createdAt).toLocaleDateString()}
-                  </p>
+                  <p className="text-xs text-slate-400 mb-3">{person.email}</p>
+                  {person.goal && (
+                    <p className="text-sm text-slate-300 mb-4 bg-slate-950/60 rounded-lg p-3 border border-white/10">
+                      <span className="text-accent font-medium">Goal:</span> {person.goal}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs uppercase tracking-[0.3em] text-white/40">
+                      Added {new Date(person.createdAt).toLocaleDateString()}
+                    </p>
+                    <button className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-xs text-primary transition hover:bg-primary/30">
+                      Start Session
+                    </button>
+                  </div>
                 </div>
-              ))
-            ) : (
-              <p className="rounded-2xl border border-dashed border-white/20 bg-white/[0.02] p-6 text-sm text-slate-300">
-                You have not added anyone yet. Use the form above to organize the people you are supporting.
-              </p>
-            )}
-          </div>
-        </motion.section>
+              ))}
+            </div>
+          </motion.section>
+        )}
       </div>
     </div>
   );
