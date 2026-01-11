@@ -16,8 +16,6 @@ import {
 import { useAuth } from '@/components/AuthProvider';
 import { monacoTheme } from '@/components/monaco-theme';
 
-export const dynamic = 'force-dynamic';
-
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 const INITIAL_CODE = `# Welcome to your coding session!
@@ -1080,3 +1078,6 @@ export default function SessionPage() {
     </Suspense>
   );
 }
+
+export const dynamic = 'force-dynamic';
+export const dynamicParams = true;
