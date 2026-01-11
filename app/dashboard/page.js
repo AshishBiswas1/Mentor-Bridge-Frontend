@@ -5,73 +5,27 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { 
   ArrowLeftOnRectangleIcon, 
-  PlusIcon, 
   CodeBracketIcon,
   CalendarDaysIcon,
   ClockIcon,
   CheckCircleIcon,
-  UserGroupIcon,
-  ChartBarIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
 
-const initialConnection = {
-  name: '',
-  email: '',
-  goal: '',
-};
+const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading, logout, addConnection } = useAuth();
-  const [connection, setConnection] = useState(initialConnection);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const { user, loading, logout } = useAuth();
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  
 
-  // Mock data for mentor dashboard
-  const [activeSessions, setActiveSessions] = useState([
-    {
-      id: 1,
-      mentee: 'Sarah Johnson',
-      topic: 'React Hooks & State Management',
-      startTime: '2:00 PM',
-      duration: '1h 30m',
-      status: 'ongoing',
-      progress: 75,
-      nextMilestone: 'Build todo app component'
-    },
-    {
-      id: 2,
-      mentee: 'Alex Chen',
-      topic: 'Algorithm Design & Problem Solving',
-      startTime: '4:00 PM',
-      duration: '1h',
-      status: 'scheduled',
-      progress: 0,
-      nextMilestone: 'Binary search implementation'
-    },
-  ]);
-
-  const [completedSessions, setCompletedSessions] = useState([
-    {
-      id: 3,
-      mentee: 'Maya Patel',
-      topic: 'JavaScript Fundamentals',
-      completedDate: '2026-01-08',
-      duration: '2h',
-      outcome: 'Successfully built first web app',
-      rating: 5
-    },
-    {
-      id: 4,
-      mentee: 'James Wilson',
-      topic: 'Git & Version Control',
-      completedDate: '2026-01-07',
-      duration: '1h 15m',
-      outcome: 'Mastered branching and merging',
-      rating: 4
-    },
-  ]);
+  // Session lists are empty by default — populate from backend/live session data
+  const [activeSessions, setActiveSessions] = useState([]);
+  const [completedSessions, setCompletedSessions] = useState([]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -80,21 +34,10 @@ export default function DashboardPage() {
   }, [loading, user, router]);
 
   const mentorshipStats = useMemo(() => {
-    const totalMentees = (user?.connections?.length ?? 0) + activeSessions.length;
     const activeCount = activeSessions.filter(s => s.status === 'ongoing').length;
     const completedCount = completedSessions.length;
-    const totalHours = completedSessions.reduce((acc, session) => {
-      const hours = parseFloat(session.duration.replace('h', '').replace('m', '')) || 1;
-      return acc + hours;
-    }, 0);
-    
-    return {
-      totalMentees,
-      activeCount,
-      completedCount,
-      totalHours: Math.round(totalHours)
-    };
-  }, [user, activeSessions, completedSessions]);
+    return { activeCount, completedCount };
+  }, [activeSessions, completedSessions]);
 
   if (loading || !user) {
     return (
@@ -111,30 +54,7 @@ export default function DashboardPage() {
     );
   }
 
-  const handleChange = (event) => {
-    const { name, value } = event.target;
-    setConnection((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleAddConnection = (event) => {
-    event.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (!connection.name || !connection.email) {
-      setError('Please provide a name and email.');
-      return;
-    }
-
-    const result = addConnection(connection);
-    if (!result.success) {
-      setError(result.message || 'Could not add person.');
-      return;
-    }
-
-    setSuccess('Person added to your mentorship circle.');
-    setConnection(initialConnection);
-  };
+  
 
   const handleLogout = () => {
     logout();
@@ -142,7 +62,8 @@ export default function DashboardPage() {
   };
 
   const startSession = () => {
-    router.push('/session');
+    // open create session modal for mentor
+    setShowCreateModal(true);
   };
 
   const joinSession = (sessionId) => {
@@ -178,25 +99,85 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        {/* Mentor Stats Overview */}
-        <section className="grid gap-6 md:grid-cols-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: 'easeOut' }}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-xl backdrop-blur"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-primary/10 p-2">
-                <UserGroupIcon className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-white/60">Total Mentees</p>
-                <p className="text-2xl font-bold text-white">{mentorshipStats.totalMentees}</p>
+        {/* Create Session Modal */}
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-white mb-2">Create New Session</h3>
+              <p className="text-sm text-slate-400 mb-4">Enter a name or topic for this collaborative session.</p>
+
+              <label className="block text-sm text-slate-300 mb-2">Session name</label>
+              <input
+                value={newSessionName}
+                onChange={(e) => setNewSessionName(e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 mb-4"
+                placeholder="E.g. Python debugging with Alice"
+              />
+
+              {createError && <p className="text-xs text-red-400 mb-2">{createError}</p>}
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    setCreateError('');
+                    if (!newSessionName || newSessionName.trim().length < 3) {
+                      setCreateError('Please enter a session name (3+ characters).');
+                      return;
+                    }
+                    setCreating(true);
+                    try {
+                      const token = user?.token;
+                      const res = await fetch(`${BASE}/session/create`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ name: newSessionName.trim() }),
+                      });
+                      const json = await res.json().catch(() => null);
+                      if (!res.ok) {
+                        setCreateError(json?.message || 'Failed to create session');
+                        setCreating(false);
+                        return;
+                      }
+
+                      // backend may return session in json.data or json.session
+                      const s = json?.data || json?.session || json;
+                      // try to resolve a link or id to navigate
+                      const link = s?.link || s?.id || (Array.isArray(s) && s[0]?.link) || null;
+                      setShowCreateModal(false);
+                      setNewSessionName('');
+                      setCreating(false);
+                      if (link) {
+                        router.push(`/session?link=${encodeURIComponent(link)}`);
+                      } else {
+                        // fallback: open generic session route
+                        router.push('/session');
+                      }
+                    } catch (e) {
+                      setCreateError(e?.message || 'Network error');
+                      setCreating(false);
+                    }
+                  }}
+                  disabled={creating}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {creating ? 'Creating…' : 'Create Session'}
+                </button>
               </div>
             </div>
-          </motion.div>
-          
+          </div>
+        )}
+
+        {/* Mentor Stats Overview */}
+        <section className="grid gap-6 md:grid-cols-2">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -230,27 +211,10 @@ export default function DashboardPage() {
               </div>
             </div>
           </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15, duration: 0.4, ease: 'easeOut' }}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-xl backdrop-blur"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-yellow-500/10 p-2">
-                <ChartBarIcon className="h-5 w-5 text-yellow-400" />
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-white/60">Hours Mentored</p>
-                <p className="text-2xl font-bold text-white">{mentorshipStats.totalHours}</p>
-              </div>
-            </div>
-          </motion.div>
         </section>
 
         {/* Active Sessions */}
-        <section className="grid gap-6 lg:grid-cols-[2fr,1fr]">
+        <section className="grid gap-6">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -347,87 +311,7 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
-          {/* Quick Actions */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25, duration: 0.4, ease: 'easeOut' }}
-            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
-          >
-            <div className="flex items-center gap-3 mb-6">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-                <PlusIcon className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <h2 className="font-display text-xl text-white">Add New Mentee</h2>
-                <p className="text-sm text-slate-300">Expand your mentorship circle</p>
-              </div>
-            </div>
-            
-            <form onSubmit={handleAddConnection} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-name">
-                  Name
-                </label>
-                <input
-                  id="connection-name"
-                  name="name"
-                  value={connection.name}
-                  onChange={handleChange}
-                  placeholder="Jamie Chen"
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-email">
-                  Email
-                </label>
-                <input
-                  id="connection-email"
-                  name="email"
-                  type="email"
-                  value={connection.email}
-                  onChange={handleChange}
-                  placeholder="jamie@build.dev"
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-goal">
-                  Learning Goal
-                </label>
-                <textarea
-                  id="connection-goal"
-                  name="goal"
-                  rows={3}
-                  value={connection.goal}
-                  onChange={handleChange}
-                  placeholder="Master React fundamentals and build first portfolio project"
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              
-              {error && (
-                <p className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
-                  {error}
-                </p>
-              )}
-              {success && (
-                <p className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-accent">
-                  {success}
-                </p>
-              )}
-              
-              <button
-                type="submit"
-                className="w-full rounded-full bg-primary py-3 text-sm font-semibold text-white shadow-lg shadow-primary/30 transition hover:bg-primary/90"
-              >
-                Add Mentee
-              </button>
-            </form>
-          </motion.div>
+          {/* Quick Actions removed */}
         </section>
 
         {/* Completed & Ending Sessions */}
