@@ -34,10 +34,83 @@ export default function DashboardPage() {
   }, [loading, user, router]);
 
   const mentorshipStats = useMemo(() => {
-    const activeCount = activeSessions.filter(s => s.status === 'ongoing').length;
+    const activeCount = activeSessions.length;
     const completedCount = completedSessions.length;
     return { activeCount, completedCount };
   }, [activeSessions, completedSessions]);
+
+  // Fetch mentor sessions (protected) and split into active/pending and completed
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const token = user?.token;
+        const res = await fetch(`${BASE}/session/mentor`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        const json = await res.json().catch(() => null);
+        if (!mounted) return;
+        if (!res.ok) {
+          // fallback: clear lists
+          setActiveSessions([]);
+          setCompletedSessions([]);
+          return;
+        }
+
+        const sessions = (json && (json.data || json)) || [];
+        // Normalize server session shape to UI session shape
+        const normalized = (Array.isArray(sessions) ? sessions : []).map((s) => {
+          // s expected: { id, link, status, started_at, ended_at, session_name }
+          const started = s.started_at ? new Date(s.started_at) : null;
+          const ended = s.ended_at ? new Date(s.ended_at) : null;
+          const duration = started && ended ? (() => {
+            const secs = Math.max(0, Math.floor((ended - started) / 1000));
+            const mins = Math.floor(secs / 60);
+            const remSecs = secs % 60;
+            return `${mins}m ${remSecs}s`;
+          })() : (started ? 'Scheduled' : '—');
+
+          const startTime = started ? started.toLocaleString() : 'TBD';
+
+          return {
+            id: s.id,
+            link: s.link,
+            status: s.status || 'unknown',
+            mentee: s.session_name || s.link || 'Session',
+            topic: s.session_name || '',
+            startTime,
+            duration,
+            progress: s.progress || 0,
+            nextMilestone: s.nextMilestone || '',
+            rating: s.rating || 0,
+            completedDate: s.ended_at || null,
+            outcome: s.outcome || '',
+          };
+        });
+        if (!Array.isArray(sessions)) {
+          setActiveSessions([]);
+          setCompletedSessions([]);
+          return;
+        }
+
+        const completed = normalized.filter((s) => String(s.status).toLowerCase() === 'ended');
+        const active = normalized.filter((s) => String(s.status).toLowerCase() !== 'ended');
+
+        setActiveSessions(active);
+        setCompletedSessions(completed);
+      } catch (e) {
+        setActiveSessions([]);
+        setCompletedSessions([]);
+      }
+    };
+
+    if (!loading && user) load();
+    return () => { mounted = false; };
+  }, [loading, user]);
 
   if (loading || !user) {
     return (
@@ -67,7 +140,39 @@ export default function DashboardPage() {
   };
 
   const joinSession = (sessionId) => {
-    router.push(`/session?id=${sessionId}`);
+    // prefer link-based navigation if possible
+    if (!sessionId) return;
+    router.push(`/session?link=${encodeURIComponent(sessionId)}`);
+  };
+
+  const rejoinSession = async (session) => {
+    try {
+      const token = user?.token;
+      if (!token) {
+        alert('Authentication required to rejoin session');
+        return;
+      }
+      const link = session.link || session.id;
+      const res = await fetch(`${BASE}/session/mentor-join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ link }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = json?.message || 'Failed to rejoin session';
+        alert(msg);
+        return;
+      }
+
+      // Navigate to session by link
+      router.push(`/session?link=${encodeURIComponent(link)}`);
+    } catch (e) {
+      alert(e?.message || 'Network error while rejoining session');
+    }
   };
 
   return (
@@ -248,16 +353,7 @@ export default function DashboardPage() {
                       <p className="text-sm text-slate-300">{session.topic}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      {session.status === 'ongoing' && (
-                        <span className="rounded-full bg-green-500/10 border border-green-500/40 px-2 py-1 text-xs text-green-400">
-                          Live
-                        </span>
-                      )}
-                      {session.status === 'scheduled' && (
-                        <span className="rounded-full bg-yellow-500/10 border border-yellow-500/40 px-2 py-1 text-xs text-yellow-400">
-                          Scheduled
-                        </span>
-                      )}
+                      {/* Status hidden per UI requirement: show active & pending without status labels */}
                     </div>
                   </div>
                   
@@ -288,15 +384,21 @@ export default function DashboardPage() {
                   )}
 
                   <div className="flex items-center justify-between">
-                    <p className="text-xs text-slate-400">
-                      Next: {session.nextMilestone}
-                    </p>
-                    <button
-                      onClick={() => joinSession(session.id)}
-                      className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
-                    >
-                      {session.status === 'ongoing' ? 'Join Session' : 'Start Session'}
-                    </button>
+                    <p className="text-xs text-slate-400">Next: {session.nextMilestone}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => joinSession(session.link || session.id)}
+                        className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
+                      >
+                        Open Session
+                      </button>
+                      <button
+                        onClick={() => rejoinSession(session)}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
+                      >
+                        Rejoin
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}

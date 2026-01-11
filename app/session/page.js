@@ -47,6 +47,8 @@ export default function SessionPage() {
   const [sessionTimer, setSessionTimer] = useState(0);
   const [participants, setParticipants] = useState([]);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [participantsLeft, setParticipantsLeft] = useState(new Set()); // Track which roles have left ("mentor" or "student")
   const socketRef = useRef(null);
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
@@ -56,6 +58,10 @@ export default function SessionPage() {
   const sessionIdRef = useRef(null);
   const remoteCursorsRef = useRef({}); // { senderId: {decorationIds: [], colorIndex} }
   const selectionListenerRef = useRef(null);
+  // Track explicit presence overrides when sockets inform us someone left/joined
+  // { mentorPresent: true|false|null, studentPresent: true|false|null }
+  const presenceRef = useRef({ mentorPresent: null, studentPresent: null });
+  const [codeLoaded, setCodeLoaded] = useState(false); // Track if code has been loaded from storage/backend
 
   // Decrement helpers: ensure we only call decrement once per client
   const decrementIfNeededSync = () => {
@@ -92,6 +98,46 @@ export default function SessionPage() {
         sessionIdRef.current = null;
       }
     } catch (e) {}
+  };
+
+  // Determine whether current authenticated user is the mentor for this session
+  const isMentor = (() => {
+    try {
+      if (!user || !session) return false;
+      const uid = user.id || user._id || null;
+      if (!uid) return false;
+      if (session.mentor_id && String(session.mentor_id) === String(uid)) return true;
+      if (session.mentor && session.mentor.id && String(session.mentor.id) === String(uid)) return true;
+      if (session.creator && session.creator.id && String(session.creator.id) === String(uid)) return true;
+      if (session.mentor_email && user.email && session.mentor_email === user.email) return true;
+      if (session.mentor_name && user.name && session.mentor_name === user.name) return true;
+      return false;
+    } catch (e) { return false; }
+  })();
+
+  // Helper: Save code to localStorage for this session
+  const saveCodeToStorage = (sessionLink, codeContent) => {
+    try {
+      if (typeof window !== 'undefined' && sessionLink) {
+        const storageKey = `mentor-bridge-code-${sessionLink}`;
+        localStorage.setItem(storageKey, codeContent);
+      }
+    } catch (e) {
+      console.warn('Failed to save code to localStorage', e);
+    }
+  };
+
+  // Helper: Load code from localStorage for this session
+  const loadCodeFromStorage = (sessionLink) => {
+    try {
+      if (typeof window !== 'undefined' && sessionLink) {
+        const storageKey = `mentor-bridge-code-${sessionLink}`;
+        return localStorage.getItem(storageKey);
+      }
+    } catch (e) {
+      console.warn('Failed to load code from localStorage', e);
+    }
+    return null;
   };
 
   useEffect(() => {
@@ -220,10 +266,23 @@ export default function SessionPage() {
     socket.on('session-joined', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
       setSession(sessionData || null);
-      if (sessionData && sessionData.code) {
-        codeRef.current = sessionData.code;
-        setCode(sessionData.code);
+      
+      // Load code with priority: localStorage > backend > INITIAL_CODE
+      if (!codeLoaded) {
+        const savedCode = loadCodeFromStorage(link);
+        if (savedCode) {
+          // Prioritize saved code from localStorage (user's last edit)
+          codeRef.current = savedCode;
+          setCode(savedCode);
+        } else if (sessionData && sessionData.code) {
+          // Fallback to backend code if available
+          codeRef.current = sessionData.code;
+          setCode(sessionData.code);
+        }
+        // If neither exists, keep INITIAL_CODE (already set in useState)
+        setCodeLoaded(true);
       }
+      
       // refresh participants list when session data arrives
       try {
         setParticipants(buildParticipants(sessionData));
@@ -239,11 +298,63 @@ export default function SessionPage() {
       setSession(sessionData || null);
       // refresh participants list when session updates
       try {
-        setParticipants(buildParticipants(sessionData));
+        const built = buildParticipants(sessionData);
+        setParticipants(built);
+
+        // Apply any explicit presence overrides we've received from sockets
+        // If mentor/student left, remove them from the list (don't just mark inactive)
+        try {
+          const pres = presenceRef.current || { mentorPresent: null, studentPresent: null };
+          if (pres.mentorPresent === false) {
+            setParticipants((prev) => prev.filter((p) => p.role !== 'mentor'));
+          }
+          if (pres.studentPresent === false) {
+            setParticipants((prev) => prev.filter((p) => p.role !== 'student'));
+          }
+        } catch (e) {}
       } catch (e) {}
       // update active state/timer
       try {
         updateSessionState(sessionData);
+      } catch (e) {}
+    });
+
+    // Participant left handler (emitted by backend on leave)
+    socket.on('participant-left', (payload) => {
+      try {
+        if (!payload || payload.link !== link) return;
+        const { role } = payload;
+        if (!role) return;
+
+        // Track that this role has left so we can hide them in the UI
+        setParticipantsLeft((prev) => new Set(prev).add(role));
+      } catch (e) {}
+    });
+
+    // Mentor joined handler - mark mentor active and request session update
+    socket.on('mentor-joined', async (payload) => {
+      try {
+        if (!payload || payload.link !== link) return;
+        
+        // Remove mentor from the left set so they show up again
+        setParticipantsLeft((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete('mentor');
+          return newSet;
+        });
+
+        // Fetch latest session data to refresh UI
+        try {
+          const resp = await fetch(`${BASE}/session?link=${encodeURIComponent(link)}`);
+          const json = await resp.json().catch(() => null);
+          const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
+          if (sessionData) {
+            setSession(sessionData);
+            try { updateSessionState(sessionData); } catch (e) {}
+          }
+        } catch (e) {
+          // ignore fetch errors
+        }
       } catch (e) {}
     });
 
@@ -296,6 +407,8 @@ export default function SessionPage() {
         if (incoming !== codeRef.current) {
           codeRef.current = incoming;
           setCode(incoming);
+          // Save received code changes to localStorage
+          saveCodeToStorage(link, incoming);
         }
       } catch (e) {}
     });
@@ -338,10 +451,23 @@ export default function SessionPage() {
         if (data && data.status === 'success') {
           const sessionData = Array.isArray(data.data) ? data.data[0] : data.data;
           setSession(sessionData || null);
-          if (sessionData && sessionData.code) {
-            codeRef.current = sessionData.code;
-            setCode(sessionData.code);
+          
+          // Load code with priority: localStorage > backend > INITIAL_CODE
+          if (!codeLoaded) {
+            const savedCode = loadCodeFromStorage(link);
+            if (savedCode) {
+              // Prioritize saved code from localStorage (user's last edit)
+              codeRef.current = savedCode;
+              setCode(savedCode);
+            } else if (sessionData && sessionData.code) {
+              // Fallback to backend code if available
+              codeRef.current = sessionData.code;
+              setCode(sessionData.code);
+            }
+            // If neither exists, keep INITIAL_CODE (already set in useState)
+            setCodeLoaded(true);
           }
+          
           // update active state/timer from fetched session
           try { updateSessionState(sessionData); } catch (e) {}
           // increment participant count once per client
@@ -429,6 +555,9 @@ export default function SessionPage() {
     const v = value || '';
     setCode(v);
     codeRef.current = v;
+
+    // Save code to localStorage for persistence across sessions
+    saveCodeToStorage(link, v);
 
     // debounce emits to avoid flooding
     try {
@@ -574,6 +703,67 @@ export default function SessionPage() {
     }
   };
 
+  // Public leave (explicitly no auth header) - used when mentor selects 'Leave' from mentor panel
+  const leavePublic = async () => {
+    try {
+      const token = user?.token;
+      if (session && session.id) {
+        try {
+          await fetch(`${BASE}/session/leave`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ sessionId: session.id, link }),
+          }).catch(() => {});
+        } catch (e) {}
+
+        try {
+          await decrementIfNeeded();
+        } catch (e) {}
+      }
+
+      try {
+        if (socketRef.current && typeof socketRef.current.disconnect === 'function') {
+          socketRef.current.disconnect();
+        }
+      } catch (e) {}
+    } finally {
+      setSessionStarted(false);
+      setSessionTimer(0);
+      setShowLeaveModal(false);
+      router.push('/session-left');
+    }
+  };
+
+  // Mentor-only: end the session (protected endpoint). The backend will emit 'session-ended' to all participants.
+  const confirmEndSession = async () => {
+    try {
+      const token = user?.token;
+      if (!token) {
+        setError('Authentication required to end session');
+        return;
+      }
+
+      await fetch(`${BASE}/session/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ link }),
+      }).catch(() => {});
+
+      // backend emits 'session-ended' and disconnects sockets; ensure local cleanup as well
+      try {
+        if (socketRef.current && typeof socketRef.current.disconnect === 'function') socketRef.current.disconnect();
+      } catch (e) {}
+    } finally {
+      setShowLeaveModal(false);
+      router.push('/session-left');
+    }
+  };
+
+  const closeLeaveModal = () => setShowLeaveModal(false);
+
   const shareSession = () => {
     // open the share modal so mentor can copy the session-join link
     setShowShareModal(true);
@@ -619,7 +809,12 @@ export default function SessionPage() {
             {/* Participants */}
             <div className="flex items-center gap-2">
               <ChatBubbleLeftRightIcon className="h-4 w-4 text-slate-400" />
-              <span className="text-sm text-slate-300">{participants.length} participants</span>
+              <span className="text-sm text-slate-300">
+                {session ? (
+                  (session.mentor_name && !participantsLeft.has('mentor') ? 1 : 0) + 
+                  (session.student_name && !participantsLeft.has('student') ? 1 : 0)
+                ) : 0} participants
+              </span>
             </div>
             
             {/* Action buttons */}
@@ -633,7 +828,7 @@ export default function SessionPage() {
                 <ShareIcon className="h-4 w-4" />
               </button>
               <button
-                onClick={leaveSession}
+                onClick={() => { if (isMentor) setShowLeaveModal(true); else leaveSession(); }}
                 className="rounded-full bg-red-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-600"
               >
                 Leave Session
@@ -694,6 +889,45 @@ export default function SessionPage() {
         </div>
       )}
 
+      {/* Leave / End Session modal for mentors */}
+      {showLeaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-white mb-2">Leave Session</h3>
+            <p className="text-sm text-slate-400 mb-4">You can either leave this session (you will be removed) or end the session for everyone. Ending the session will disconnect all participants.</p>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  // Mentor chooses to leave but not end session — call public leave
+                  leavePublic();
+                }}
+                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200"
+              >
+                Leave
+              </button>
+
+              <button
+                onClick={() => {
+                  // Mentor ends the session for everyone
+                  confirmEndSession();
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+              >
+                End Session
+              </button>
+
+              <button
+                onClick={closeLeaveModal}
+                className="ml-auto rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex h-[calc(100vh-4rem)]">
         {/* Participants Sidebar */}
         <aside className="w-64 border-r border-white/10 bg-slate-950/60 p-4">
@@ -704,24 +938,53 @@ export default function SessionPage() {
             </div>
             
             <div className="space-y-2">
-              {participants.map((participant) => (
-                <div key={participant.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+              {/* Render mentor if present in session and hasn't left */}
+              {session && session.mentor_name && !participantsLeft.has('mentor') && (
+                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
                   <div className="flex-shrink-0">
                     <div className="relative">
                       <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
-                        {participant.name.charAt(0)}
+                        {session.mentor_name.charAt(0).toUpperCase()}
                       </div>
-                      {participant.active && (
-                        <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
-                      )}
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
                     </div>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{participant.name}</p>
-                    <p className="text-xs text-slate-400 capitalize">{participant.role}</p>
+                    <p className="text-sm font-medium text-white truncate">{session.mentor_name}</p>
+                    <p className="text-xs text-slate-400">Mentor</p>
                   </div>
                 </div>
-              ))}
+              )}
+
+              {/* Render student if present in session and hasn't left */}
+              {session && session.student_name && !participantsLeft.has('student') && (
+                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                  <div className="flex-shrink-0">
+                    <div className="relative">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
+                        {session.student_name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{session.student_name}</p>
+                    <p className="text-xs text-slate-400">Student</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Show empty state if no visible participants */}
+              {session && (
+                (!session.mentor_name && !session.student_name) ||
+                (participantsLeft.has('mentor') && participantsLeft.has('student')) ||
+                (participantsLeft.has('mentor') && !session.student_name) ||
+                (participantsLeft.has('student') && !session.mentor_name)
+              ) && (
+                <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.02] p-4 text-center">
+                  <p className="text-xs text-slate-400">No participants yet</p>
+                </div>
+              )}
             </div>
 
             {/* Invite button removed — sharing handled elsewhere */}
