@@ -4,6 +4,8 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 
+export const dynamic = 'force-dynamic';
+
 function SessionJoinContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
