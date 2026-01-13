@@ -501,9 +501,26 @@ function SessionPageContent() {
           
           // update active state/timer from fetched session
           try { updateSessionState(sessionData); } catch (e) {}
-          // increment participant count once per client
-          if (sessionData && sessionData.id && !incrementedRef.current) {
+          
+          // Check if we just changed the link (to avoid double increment)
+          let skipIncrement = false;
+          try {
+            const linkChanged = sessionStorage.getItem('mentor-bridge-link-changed');
+            if (linkChanged === 'true') {
+              skipIncrement = true;
+              sessionStorage.removeItem('mentor-bridge-link-changed');
+            }
+          } catch (e) {
+            // ignore
+          }
+          
+          // increment participant count once per client (unless we just changed the link)
+          if (!skipIncrement && sessionData && sessionData.id && !incrementedRef.current) {
             fetch(`${BASE}/session/increment/${sessionData.id}`, { method: 'POST' }).catch(() => {});
+            incrementedRef.current = true;
+            sessionIdRef.current = sessionData.id;
+          } else if (skipIncrement && sessionData && sessionData.id) {
+            // Still set the refs even if we skip increment
             incrementedRef.current = true;
             sessionIdRef.current = sessionData.id;
           }
@@ -813,6 +830,11 @@ function SessionPageContent() {
 
     setGeneratingNewLink(true);
     try {
+      // Prevent beforeunload from sending a decrement while we rotate the link
+      if (incrementedRef.current) {
+        incrementedRef.current = false;
+      }
+
       const res = await fetch(`${BASE}/session/new-link`, {
         method: 'POST',
         headers: {
@@ -829,13 +851,32 @@ function SessionPageContent() {
         return;
       }
 
-      // Update session with new link
-      const updatedSession = json?.data?.session || json?.session || null;
-      if (updatedSession) {
-        setSession(updatedSession);
-        alert('New link generated successfully! Previous link is now invalid.');
+      // Extract the new link from response - backend returns { status: 'success', data: sessionObject }
+      const updated = json && json.data;
+      const newLink = (updated && updated.link) || (updated && updated[0] && updated[0].link);
+
+      if (newLink) {
+        // Save current code to localStorage with new link
+        saveCodeToStorage(newLink, code);
+        
+        // Set flag in sessionStorage to prevent increment on next page load
+        try {
+          sessionStorage.setItem('mentor-bridge-link-changed', 'true');
+        } catch (e) {
+          // ignore
+        }
+        
+        // Close modal
+        setShowNewLinkModal(false);
+        
+        // Redirect to the new session link - this will reload the page and reconnect sockets
+        // Backend already set participants=1, so mentor stays connected
+        window.location.href = `/session?link=${encodeURIComponent(newLink)}`;
+        return;
       }
-      setShowNewLinkModal(false);
+
+      // Fallback: if we got the session but no link, show error
+      alert('Failed to get new link from response');
       setGeneratingNewLink(false);
     } catch (e) {
       alert(e?.message || 'Network error');
@@ -920,38 +961,6 @@ function SessionPageContent() {
           </div>
         </div>
       </header>
-
-      {/* Generate New Link Modal */}
-      {showNewLinkModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Generate New Session Link</h3>
-            <p className="text-sm text-slate-400 mb-4">
-              This will create a new unique link for this session. The previous link will become invalid, 
-              and any students who haven't joined yet will need the new link to join.
-            </p>
-            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
-              <p className="text-xs text-yellow-300">⚠ Warning: Students using the old link will no longer be able to join this session.</p>
-            </div>
-            <div className="flex items-center justify-end gap-3">
-              <button
-                onClick={() => setShowNewLinkModal(false)}
-                disabled={generatingNewLink}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={generateNewLink}
-                disabled={generatingNewLink}
-                className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-yellow-600 disabled:opacity-60"
-              >
-                {generatingNewLink ? 'Generating...' : 'Generate New Link'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Generate New Link Modal */}
       {showNewLinkModal && (
