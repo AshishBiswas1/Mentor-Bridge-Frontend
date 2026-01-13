@@ -21,6 +21,11 @@ export default function DashboardPage() {
   const [newSessionName, setNewSessionName] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [studentsPanelOpen, setStudentsPanelOpen] = useState(false);
+  const [studentsLoading, setStudentsLoading] = useState(false);
+  const [studentsError, setStudentsError] = useState('');
+  const [studentsList, setStudentsList] = useState([]);
+  const [studentsSession, setStudentsSession] = useState(null);
   
 
   // Session lists are empty by default — populate from backend/live session data
@@ -172,6 +177,56 @@ export default function DashboardPage() {
       router.push(`/session?link=${encodeURIComponent(link)}`);
     } catch (e) {
       alert(e?.message || 'Network error while rejoining session');
+    }
+  };
+
+  const closeStudentsPanel = () => {
+    setStudentsPanelOpen(false);
+    setStudentsList([]);
+    setStudentsError('');
+    setStudentsLoading(false);
+    setStudentsSession(null);
+  };
+
+  const viewStudents = async (session) => {
+    try {
+      setStudentsSession(session);
+      setStudentsPanelOpen(true);
+      setStudentsLoading(true);
+      setStudentsError('');
+      setStudentsList([]);
+
+      const token = user?.token;
+      // Prefer the real UUID `session.id` (database id). If missing, fall back to link.
+      const id = session.id || session.link;
+      if (!id) {
+        setStudentsError('Session id missing');
+        setStudentsLoading(false);
+        return;
+      }
+
+      const url = `${BASE}/user/sessionStudents?session_id=${encodeURIComponent(id)}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setStudentsError(json?.message || 'Failed to load students');
+        setStudentsLoading(false);
+        return;
+      }
+
+      const data = json && json.data ? json.data : [];
+      setStudentsList(Array.isArray(data) ? data : []);
+      setStudentsLoading(false);
+    } catch (e) {
+      setStudentsError(e?.message || 'Network error');
+      setStudentsLoading(false);
     }
   };
 
@@ -343,61 +398,60 @@ export default function DashboardPage() {
             
             <div className="space-y-4">
               {activeSessions.map((session) => (
-                <div
-                  key={session.id}
-                  className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 hover:border-primary/30 hover:bg-slate-950/80 transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <h3 className="font-display text-lg text-white">{session.mentee}</h3>
-                      <p className="text-sm text-slate-300">{session.topic}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {/* Status hidden per UI requirement: show active & pending without status labels */}
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4 mb-3 text-sm text-slate-400">
-                    <div className="flex items-center gap-2">
-                      <CalendarDaysIcon className="h-4 w-4" />
-                      <span>{session.startTime}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <ClockIcon className="h-4 w-4" />
-                      <span>{session.duration}</span>
-                    </div>
-                  </div>
-
-                  {session.progress > 0 && (
-                    <div className="mb-3">
-                      <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Progress</span>
-                        <span>{session.progress}%</span>
+                <div key={session.id} className="flex">
+                  <div className="w-full max-w-xl mx-auto rounded-2xl border border-white/10 bg-slate-950/60 p-4 hover:border-primary/30 hover:bg-slate-950/80 transition-colors">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="font-display text-lg text-white">{session.mentee}</h3>
+                        <p className="text-sm text-slate-300">{session.topic}</p>
                       </div>
-                      <div className="w-full bg-slate-800 rounded-full h-2">
-                        <div 
-                          className="bg-primary h-2 rounded-full transition-all duration-300" 
-                          style={{ width: `${session.progress}%` }}
-                        />
+                      <div className="flex items-center gap-2">
+                        {/* Status hidden per UI requirement: show active & pending without status labels */}
                       </div>
                     </div>
-                  )}
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-3 text-sm text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <CalendarDaysIcon className="h-4 w-4" />
+                        <span>{session.startTime}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <ClockIcon className="h-4 w-4" />
+                        <span>{session.duration}</span>
+                      </div>
+                    </div>
 
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-slate-400">Next: {session.nextMilestone}</p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => joinSession(session.link || session.id)}
-                        className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
-                      >
-                        Open Session
-                      </button>
-                      <button
-                        onClick={() => rejoinSession(session)}
-                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
-                      >
-                        Rejoin
-                      </button>
+                    {session.progress > 0 && (
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                          <span>Progress</span>
+                          <span>{session.progress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-800 rounded-full h-2">
+                          <div 
+                            className="bg-primary h-2 rounded-full transition-all duration-300" 
+                            style={{ width: `${session.progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-slate-400">Next: {session.nextMilestone}</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => joinSession(session.link || session.id)}
+                          className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
+                        >
+                          Open Session
+                        </button>
+                        <button
+                          onClick={() => rejoinSession(session)}
+                          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
+                        >
+                          Rejoin
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -440,41 +494,48 @@ export default function DashboardPage() {
           
           <div className="grid gap-4 md:grid-cols-2">
             {completedSessions.map((session) => (
-              <div
-                key={session.id}
-                className="rounded-2xl border border-white/10 bg-slate-950/60 p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="font-display text-lg text-white">{session.mentee}</h3>
-                    <p className="text-sm text-slate-300">{session.topic}</p>
+              <div key={session.id} className="flex">
+                <div className="w-full max-w-xl mx-auto rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="font-display text-lg text-white">{session.mentee}</h3>
+                      <p className="text-sm text-slate-300">{session.topic}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {[...Array(5)].map((_, i) => (
+                        <span
+                          key={i}
+                          className={`text-xs ${i < session.rating ? 'text-yellow-400' : 'text-slate-600'}`}
+                        >
+                          ★
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    {[...Array(5)].map((_, i) => (
-                      <span
-                        key={i}
-                        className={`text-xs ${i < session.rating ? 'text-yellow-400' : 'text-slate-600'}`}
-                      >
-                        ★
-                      </span>
-                    ))}
+                  
+                  <div className="space-y-2 text-sm text-slate-400 mb-3">
+                    <div className="flex items-center gap-2">
+                      <CalendarDaysIcon className="h-4 w-4" />
+                      <span>Completed {new Date(session.completedDate).toLocaleDateString()}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <ClockIcon className="h-4 w-4" />
+                      <span>Duration: {session.duration}</span>
+                    </div>
                   </div>
-                </div>
-                
-                <div className="space-y-2 text-sm text-slate-400 mb-3">
-                  <div className="flex items-center gap-2">
-                    <CalendarDaysIcon className="h-4 w-4" />
-                    <span>Completed {new Date(session.completedDate).toLocaleDateString()}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ClockIcon className="h-4 w-4" />
-                    <span>Duration: {session.duration}</span>
-                  </div>
-                </div>
 
-                <p className="text-sm text-slate-300 bg-slate-950/60 rounded-lg p-3 border border-white/10">
-                  <span className="text-accent font-medium">Outcome:</span> {session.outcome}
-                </p>
+                  <div className="flex items-center justify-between mt-4">
+                    <div className="text-xs text-slate-400">{session.duration}</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => viewStudents(session)}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
+                      >
+                        View Students
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             ))}
 
@@ -498,6 +559,7 @@ export default function DashboardPage() {
           >
             <div className="flex items-center justify-between mb-6">
               <div>
+              
                 <h2 className="font-display text-xl text-white">Your Mentees</h2>
                 <p className="text-sm text-slate-300">People you are currently mentoring</p>
               </div>
@@ -531,6 +593,48 @@ export default function DashboardPage() {
               ))}
             </div>
           </motion.section>
+        )}
+
+        {/* Students slide-over panel (global) */}
+        {studentsPanelOpen && (
+          <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={closeStudentsPanel} />
+            <div className="relative w-full max-w-2xl rounded-t-xl md:rounded-xl bg-slate-950/95 border border-white/10 p-6 m-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Students who joined</h3>
+                  <p className="text-sm text-slate-400">Session: {studentsSession?.mentee || studentsSession?.link || studentsSession?.id}</p>
+                </div>
+                <div>
+                  <button onClick={closeStudentsPanel} className="rounded-lg bg-white/5 px-3 py-1 text-sm text-slate-200">Close</button>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                {studentsLoading && <p className="text-sm text-slate-400">Loading students…</p>}
+                {studentsError && <p className="text-sm text-red-400">{studentsError}</p>}
+                {!studentsLoading && !studentsError && studentsList.length === 0 && (
+                  <p className="text-sm text-slate-400">No students found for this session.</p>
+                )}
+
+                {!studentsLoading && studentsList.length > 0 && (
+                  <ul className="mt-3 space-y-3">
+                    {studentsList.map((s, i) => (
+                      <li key={i} className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-white font-medium">{s.student_name || 'Student'}</p>
+                            <p className="text-xs text-slate-400">{s.student_email || '—'}</p>
+                          </div>
+                          <div className="text-xs text-slate-400">{s.created_at ? new Date(s.created_at).toLocaleString() : ''}</div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

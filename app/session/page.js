@@ -48,6 +48,8 @@ function SessionPageContent() {
   const [participants, setParticipants] = useState([]);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [showNewLinkModal, setShowNewLinkModal] = useState(false);
+  const [generatingNewLink, setGeneratingNewLink] = useState(false);
   const [participantsLeft, setParticipantsLeft] = useState(new Set()); // Track which roles have left ("mentor" or "student")
   const socketRef = useRef(null);
   const editorRef = useRef(null);
@@ -344,6 +346,35 @@ function SessionPageContent() {
         });
 
         // Fetch latest session data to refresh UI
+        try {
+          const resp = await fetch(`${BASE}/session?link=${encodeURIComponent(link)}`);
+          const json = await resp.json().catch(() => null);
+          const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
+          if (sessionData) {
+            setSession(sessionData);
+            try { updateSessionState(sessionData); } catch (e) {}
+          }
+        } catch (e) {
+          // ignore fetch errors
+        }
+      } catch (e) {}
+    });
+
+    // Generic participant joined handler - remove role from left set and refresh session
+    socket.on('participant-joined', async (payload) => {
+      try {
+        if (!payload || payload.link !== link) return;
+        const { role } = payload || {};
+        if (!role) return;
+
+        // Remove the role from the left set so they show up again
+        setParticipantsLeft((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(role);
+          return newSet;
+        });
+
+        // Fetch latest session data to refresh UI (participant name may be present there)
         try {
           const resp = await fetch(`${BASE}/session?link=${encodeURIComponent(link)}`);
           const json = await resp.json().catch(() => null);
@@ -769,6 +800,49 @@ function SessionPageContent() {
     setShowShareModal(true);
   };
 
+  const generateNewLink = async () => {
+    if (!session || !session.link) {
+      alert('Session link not available');
+      return;
+    }
+
+    if (!user || !user.token) {
+      alert('Authentication required');
+      return;
+    }
+
+    setGeneratingNewLink(true);
+    try {
+      const res = await fetch(`${BASE}/session/new-link`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${user.token}`,
+        },
+        body: JSON.stringify({ link: session.link }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        alert(json?.message || 'Failed to generate new link');
+        setGeneratingNewLink(false);
+        return;
+      }
+
+      // Update session with new link
+      const updatedSession = json?.data?.session || json?.session || null;
+      if (updatedSession) {
+        setSession(updatedSession);
+        alert('New link generated successfully! Previous link is now invalid.');
+      }
+      setShowNewLinkModal(false);
+      setGeneratingNewLink(false);
+    } catch (e) {
+      alert(e?.message || 'Network error');
+      setGeneratingNewLink(false);
+    }
+  };
+
   if (loading || (!user && !guest)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
@@ -820,6 +894,15 @@ function SessionPageContent() {
             {/* Action buttons */}
             <div className="flex items-center gap-2">
               {/* Copy code removed */}
+              {isMentor && session?.status === 'pending' && (
+                <button
+                  onClick={() => setShowNewLinkModal(true)}
+                  className="rounded-full border border-yellow-500/40 bg-yellow-500/20 px-4 py-2 text-sm font-semibold text-yellow-300 transition hover:bg-yellow-500/30"
+                  title="Generate new session link"
+                >
+                  Generate New Link
+                </button>
+              )}
               <button
                 onClick={shareSession}
                 className="rounded-full border border-white/10 bg-white/10 p-2 transition hover:border-primary/40 hover:bg-primary/20"
@@ -837,6 +920,70 @@ function SessionPageContent() {
           </div>
         </div>
       </header>
+
+      {/* Generate New Link Modal */}
+      {showNewLinkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-white mb-2">Generate New Session Link</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              This will create a new unique link for this session. The previous link will become invalid, 
+              and any students who haven't joined yet will need the new link to join.
+            </p>
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
+              <p className="text-xs text-yellow-300">⚠ Warning: Students using the old link will no longer be able to join this session.</p>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowNewLinkModal(false)}
+                disabled={generatingNewLink}
+                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={generateNewLink}
+                disabled={generatingNewLink}
+                className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-yellow-600 disabled:opacity-60"
+              >
+                {generatingNewLink ? 'Generating...' : 'Generate New Link'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generate New Link Modal */}
+      {showNewLinkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-white mb-2">Generate New Session Link</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              This will create a new unique link for this session. The previous link will become invalid, 
+              and any students who haven't joined yet will need the new link to join.
+            </p>
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
+              <p className="text-xs text-yellow-300">⚠ Warning: Students using the old link will no longer be able to join this session.</p>
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowNewLinkModal(false)}
+                disabled={generatingNewLink}
+                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={generateNewLink}
+                disabled={generatingNewLink}
+                className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-yellow-600 disabled:opacity-60"
+              >
+                {generatingNewLink ? 'Generating...' : 'Generate New Link'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Share modal */}
       {showShareModal && (
