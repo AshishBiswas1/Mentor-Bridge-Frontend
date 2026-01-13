@@ -478,24 +478,41 @@ function SessionPageContent() {
     // fetch session data from backend
     fetch(`${BASE}/session?link=${encodeURIComponent(link)}`)
       .then((res) => res.json())
-      .then((data) => {
+      .then(async (data) => {
         if (data && data.status === 'success') {
           const sessionData = Array.isArray(data.data) ? data.data[0] : data.data;
           setSession(sessionData || null);
           
-          // Load code with priority: localStorage > backend > INITIAL_CODE
-          if (!codeLoaded) {
-            const savedCode = loadCodeFromStorage(link);
-            if (savedCode) {
-              // Prioritize saved code from localStorage (user's last edit)
-              codeRef.current = savedCode;
-              setCode(savedCode);
-            } else if (sessionData && sessionData.code) {
-              // Fallback to backend code if available
-              codeRef.current = sessionData.code;
-              setCode(sessionData.code);
+          // Load code with priority: Database > localStorage > INITIAL_CODE
+          if (!codeLoaded && sessionData && sessionData.id) {
+            try {
+              // First try to fetch from database
+              const codeRes = await fetch(`${BASE}/editor/getCode?session_id=${encodeURIComponent(sessionData.id)}`);
+              const codeJson = await codeRes.json().catch(() => null);
+              
+              if (codeRes.ok && codeJson?.data?.code) {
+                // Use database code if available
+                codeRef.current = codeJson.data.code;
+                setCode(codeJson.data.code);
+                // Also save to localStorage for offline access
+                saveCodeToStorage(link, codeJson.data.code);
+              } else {
+                // Fallback to localStorage
+                const savedCode = loadCodeFromStorage(link);
+                if (savedCode) {
+                  codeRef.current = savedCode;
+                  setCode(savedCode);
+                }
+                // If neither exists, keep INITIAL_CODE (already set in useState)
+              }
+            } catch (e) {
+              // On error, try localStorage
+              const savedCode = loadCodeFromStorage(link);
+              if (savedCode) {
+                codeRef.current = savedCode;
+                setCode(savedCode);
+              }
             }
-            // If neither exists, keep INITIAL_CODE (already set in useState)
             setCodeLoaded(true);
           }
           
@@ -614,7 +631,18 @@ function SessionPageContent() {
         if (socketRef.current && socketRef.current.connected) {
           socketRef.current.emit('code-change', { link, code: v });
         }
-      }, 200);
+        
+        // Auto-save to database (debounced to avoid excessive saves)
+        if (session && session.id) {
+          fetch(`${BASE}/editor/saveCode`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: v, session_id: session.id })
+          }).catch(() => {
+            // Silent fail - localStorage is the fallback
+          });
+        }
+      }, 2000); // 2 second debounce for auto-save
     } catch (e) {}
   };
 
