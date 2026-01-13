@@ -5,73 +5,32 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { 
   ArrowLeftOnRectangleIcon, 
-  PlusIcon, 
   CodeBracketIcon,
   CalendarDaysIcon,
   ClockIcon,
   CheckCircleIcon,
-  UserGroupIcon,
-  ChartBarIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
 
-const initialConnection = {
-  name: '',
-  email: '',
-  goal: '',
-};
+const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading, logout, addConnection } = useAuth();
-  const [connection, setConnection] = useState(initialConnection);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const { user, loading, logout } = useAuth();
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [studentsPanelOpen, setStudentsPanelOpen] = useState(false);
+  const [studentsLoading, setStudentsLoading] = useState(false);
+  const [studentsError, setStudentsError] = useState('');
+  const [studentsList, setStudentsList] = useState([]);
+  const [studentsSession, setStudentsSession] = useState(null);
+  
 
-  // Mock data for mentor dashboard
-  const [activeSessions, setActiveSessions] = useState([
-    {
-      id: 1,
-      mentee: 'Sarah Johnson',
-      topic: 'React Hooks & State Management',
-      startTime: '2:00 PM',
-      duration: '1h 30m',
-      status: 'ongoing',
-      progress: 75,
-      nextMilestone: 'Build todo app component'
-    },
-    {
-      id: 2,
-      mentee: 'Alex Chen',
-      topic: 'Algorithm Design & Problem Solving',
-      startTime: '4:00 PM',
-      duration: '1h',
-      status: 'scheduled',
-      progress: 0,
-      nextMilestone: 'Binary search implementation'
-    },
-  ]);
-
-  const [completedSessions, setCompletedSessions] = useState([
-    {
-      id: 3,
-      mentee: 'Maya Patel',
-      topic: 'JavaScript Fundamentals',
-      completedDate: '2026-01-08',
-      duration: '2h',
-      outcome: 'Successfully built first web app',
-      rating: 5
-    },
-    {
-      id: 4,
-      mentee: 'James Wilson',
-      topic: 'Git & Version Control',
-      completedDate: '2026-01-07',
-      duration: '1h 15m',
-      outcome: 'Mastered branching and merging',
-      rating: 4
-    },
-  ]);
+  // Session lists are empty by default — populate from backend/live session data
+  const [activeSessions, setActiveSessions] = useState([]);
+  const [completedSessions, setCompletedSessions] = useState([]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -80,21 +39,83 @@ export default function DashboardPage() {
   }, [loading, user, router]);
 
   const mentorshipStats = useMemo(() => {
-    const totalMentees = (user?.connections?.length ?? 0) + activeSessions.length;
-    const activeCount = activeSessions.filter(s => s.status === 'ongoing').length;
+    const activeCount = activeSessions.length;
     const completedCount = completedSessions.length;
-    const totalHours = completedSessions.reduce((acc, session) => {
-      const hours = parseFloat(session.duration.replace('h', '').replace('m', '')) || 1;
-      return acc + hours;
-    }, 0);
-    
-    return {
-      totalMentees,
-      activeCount,
-      completedCount,
-      totalHours: Math.round(totalHours)
+    return { activeCount, completedCount };
+  }, [activeSessions, completedSessions]);
+
+  // Fetch mentor sessions (protected) and split into active/pending and completed
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const token = user?.token;
+        const res = await fetch(`${BASE}/session/mentor`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        const json = await res.json().catch(() => null);
+        if (!mounted) return;
+        if (!res.ok) {
+          // fallback: clear lists
+          setActiveSessions([]);
+          setCompletedSessions([]);
+          return;
+        }
+
+        const sessions = (json && (json.data || json)) || [];
+        // Normalize server session shape to UI session shape
+        const normalized = (Array.isArray(sessions) ? sessions : []).map((s) => {
+          // s expected: { id, link, status, started_at, ended_at, session_name }
+          const started = s.started_at ? new Date(s.started_at) : null;
+          const ended = s.ended_at ? new Date(s.ended_at) : null;
+          const duration = started && ended ? (() => {
+            const secs = Math.max(0, Math.floor((ended - started) / 1000));
+            const mins = Math.floor(secs / 60);
+            const remSecs = secs % 60;
+            return `${mins}m ${remSecs}s`;
+          })() : (started ? 'Scheduled' : '—');
+
+          const startTime = started ? started.toLocaleString() : 'TBD';
+
+          return {
+            id: s.id,
+            link: s.link,
+            status: s.status || 'unknown',
+            mentee: s.session_name || s.link || 'Session',
+            topic: s.session_name || '',
+            startTime,
+            duration,
+            progress: s.progress || 0,
+            nextMilestone: s.nextMilestone || '',
+            rating: s.rating || 0,
+            completedDate: s.ended_at || null,
+            outcome: s.outcome || '',
+          };
+        });
+        if (!Array.isArray(sessions)) {
+          setActiveSessions([]);
+          setCompletedSessions([]);
+          return;
+        }
+
+        const completed = normalized.filter((s) => String(s.status).toLowerCase() === 'ended');
+        const active = normalized.filter((s) => String(s.status).toLowerCase() !== 'ended');
+
+        setActiveSessions(active);
+        setCompletedSessions(completed);
+      } catch (e) {
+        setActiveSessions([]);
+        setCompletedSessions([]);
+      }
     };
-  }, [user, activeSessions, completedSessions]);
+
+    if (!loading && user) load();
+    return () => { mounted = false; };
+  }, [loading, user]);
 
   if (loading || !user) {
     return (
@@ -111,30 +132,7 @@ export default function DashboardPage() {
     );
   }
 
-  const handleChange = (event) => {
-    const { name, value } = event.target;
-    setConnection((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleAddConnection = (event) => {
-    event.preventDefault();
-    setError('');
-    setSuccess('');
-
-    if (!connection.name || !connection.email) {
-      setError('Please provide a name and email.');
-      return;
-    }
-
-    const result = addConnection(connection);
-    if (!result.success) {
-      setError(result.message || 'Could not add person.');
-      return;
-    }
-
-    setSuccess('Person added to your mentorship circle.');
-    setConnection(initialConnection);
-  };
+  
 
   const handleLogout = () => {
     logout();
@@ -142,11 +140,94 @@ export default function DashboardPage() {
   };
 
   const startSession = () => {
-    router.push('/session');
+    // open create session modal for mentor
+    setShowCreateModal(true);
   };
 
   const joinSession = (sessionId) => {
-    router.push(`/session?id=${sessionId}`);
+    // prefer link-based navigation if possible
+    if (!sessionId) return;
+    router.push(`/session?link=${encodeURIComponent(sessionId)}`);
+  };
+
+  const rejoinSession = async (session) => {
+    try {
+      const token = user?.token;
+      if (!token) {
+        alert('Authentication required to rejoin session');
+        return;
+      }
+      const link = session.link || session.id;
+      const res = await fetch(`${BASE}/session/mentor-join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ link }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = json?.message || 'Failed to rejoin session';
+        alert(msg);
+        return;
+      }
+
+      // Navigate to session by link
+      router.push(`/session?link=${encodeURIComponent(link)}`);
+    } catch (e) {
+      alert(e?.message || 'Network error while rejoining session');
+    }
+  };
+
+  const closeStudentsPanel = () => {
+    setStudentsPanelOpen(false);
+    setStudentsList([]);
+    setStudentsError('');
+    setStudentsLoading(false);
+    setStudentsSession(null);
+  };
+
+  const viewStudents = async (session) => {
+    try {
+      setStudentsSession(session);
+      setStudentsPanelOpen(true);
+      setStudentsLoading(true);
+      setStudentsError('');
+      setStudentsList([]);
+
+      const token = user?.token;
+      // Prefer the real UUID `session.id` (database id). If missing, fall back to link.
+      const id = session.id || session.link;
+      if (!id) {
+        setStudentsError('Session id missing');
+        setStudentsLoading(false);
+        return;
+      }
+
+      const url = `${BASE}/user/sessionStudents?session_id=${encodeURIComponent(id)}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setStudentsError(json?.message || 'Failed to load students');
+        setStudentsLoading(false);
+        return;
+      }
+
+      const data = json && json.data ? json.data : [];
+      setStudentsList(Array.isArray(data) ? data : []);
+      setStudentsLoading(false);
+    } catch (e) {
+      setStudentsError(e?.message || 'Network error');
+      setStudentsLoading(false);
+    }
   };
 
   return (
@@ -178,25 +259,85 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        {/* Mentor Stats Overview */}
-        <section className="grid gap-6 md:grid-cols-4">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: 'easeOut' }}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-xl backdrop-blur"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-primary/10 p-2">
-                <UserGroupIcon className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-white/60">Total Mentees</p>
-                <p className="text-2xl font-bold text-white">{mentorshipStats.totalMentees}</p>
+        {/* Create Session Modal */}
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-white mb-2">Create New Session</h3>
+              <p className="text-sm text-slate-400 mb-4">Enter a name or topic for this collaborative session.</p>
+
+              <label className="block text-sm text-slate-300 mb-2">Session name</label>
+              <input
+                value={newSessionName}
+                onChange={(e) => setNewSessionName(e.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 mb-4"
+                placeholder="E.g. Python debugging with Alice"
+              />
+
+              {createError && <p className="text-xs text-red-400 mb-2">{createError}</p>}
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    setCreateError('');
+                    if (!newSessionName || newSessionName.trim().length < 3) {
+                      setCreateError('Please enter a session name (3+ characters).');
+                      return;
+                    }
+                    setCreating(true);
+                    try {
+                      const token = user?.token;
+                      const res = await fetch(`${BASE}/session/create`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ name: newSessionName.trim() }),
+                      });
+                      const json = await res.json().catch(() => null);
+                      if (!res.ok) {
+                        setCreateError(json?.message || 'Failed to create session');
+                        setCreating(false);
+                        return;
+                      }
+
+                      // backend may return session in json.data or json.session
+                      const s = json?.data || json?.session || json;
+                      // try to resolve a link or id to navigate
+                      const link = s?.link || s?.id || (Array.isArray(s) && s[0]?.link) || null;
+                      setShowCreateModal(false);
+                      setNewSessionName('');
+                      setCreating(false);
+                      if (link) {
+                        router.push(`/session?link=${encodeURIComponent(link)}`);
+                      } else {
+                        // fallback: open generic session route
+                        router.push('/session');
+                      }
+                    } catch (e) {
+                      setCreateError(e?.message || 'Network error');
+                      setCreating(false);
+                    }
+                  }}
+                  disabled={creating}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:opacity-60"
+                >
+                  {creating ? 'Creating…' : 'Create Session'}
+                </button>
               </div>
             </div>
-          </motion.div>
-          
+          </div>
+        )}
+
+        {/* Mentor Stats Overview */}
+        <section className="grid gap-6 md:grid-cols-2">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -230,27 +371,10 @@ export default function DashboardPage() {
               </div>
             </div>
           </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15, duration: 0.4, ease: 'easeOut' }}
-            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-xl backdrop-blur"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-yellow-500/10 p-2">
-                <ChartBarIcon className="h-5 w-5 text-yellow-400" />
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-white/60">Hours Mentored</p>
-                <p className="text-2xl font-bold text-white">{mentorshipStats.totalHours}</p>
-              </div>
-            </div>
-          </motion.div>
         </section>
 
         {/* Active Sessions */}
-        <section className="grid gap-6 lg:grid-cols-[2fr,1fr]">
+        <section className="grid gap-6">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -274,65 +398,61 @@ export default function DashboardPage() {
             
             <div className="space-y-4">
               {activeSessions.map((session) => (
-                <div
-                  key={session.id}
-                  className="rounded-2xl border border-white/10 bg-slate-950/60 p-4 hover:border-primary/30 hover:bg-slate-950/80 transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <h3 className="font-display text-lg text-white">{session.mentee}</h3>
-                      <p className="text-sm text-slate-300">{session.topic}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {session.status === 'ongoing' && (
-                        <span className="rounded-full bg-green-500/10 border border-green-500/40 px-2 py-1 text-xs text-green-400">
-                          Live
-                        </span>
-                      )}
-                      {session.status === 'scheduled' && (
-                        <span className="rounded-full bg-yellow-500/10 border border-yellow-500/40 px-2 py-1 text-xs text-yellow-400">
-                          Scheduled
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4 mb-3 text-sm text-slate-400">
-                    <div className="flex items-center gap-2">
-                      <CalendarDaysIcon className="h-4 w-4" />
-                      <span>{session.startTime}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <ClockIcon className="h-4 w-4" />
-                      <span>{session.duration}</span>
-                    </div>
-                  </div>
-
-                  {session.progress > 0 && (
-                    <div className="mb-3">
-                      <div className="flex justify-between text-xs text-slate-400 mb-1">
-                        <span>Progress</span>
-                        <span>{session.progress}%</span>
+                <div key={session.id} className="flex">
+                  <div className="w-full max-w-xl mx-auto rounded-2xl border border-white/10 bg-slate-950/60 p-4 hover:border-primary/30 hover:bg-slate-950/80 transition-colors">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="font-display text-lg text-white">{session.mentee}</h3>
+                        <p className="text-sm text-slate-300">{session.topic}</p>
                       </div>
-                      <div className="w-full bg-slate-800 rounded-full h-2">
-                        <div 
-                          className="bg-primary h-2 rounded-full transition-all duration-300" 
-                          style={{ width: `${session.progress}%` }}
-                        />
+                      <div className="flex items-center gap-2">
+                        {/* Status hidden per UI requirement: show active & pending without status labels */}
                       </div>
                     </div>
-                  )}
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-3 text-sm text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <CalendarDaysIcon className="h-4 w-4" />
+                        <span>{session.startTime}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <ClockIcon className="h-4 w-4" />
+                        <span>{session.duration}</span>
+                      </div>
+                    </div>
 
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-slate-400">
-                      Next: {session.nextMilestone}
-                    </p>
-                    <button
-                      onClick={() => joinSession(session.id)}
-                      className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
-                    >
-                      {session.status === 'ongoing' ? 'Join Session' : 'Start Session'}
-                    </button>
+                    {session.progress > 0 && (
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                          <span>Progress</span>
+                          <span>{session.progress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-800 rounded-full h-2">
+                          <div 
+                            className="bg-primary h-2 rounded-full transition-all duration-300" 
+                            style={{ width: `${session.progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-slate-400">Next: {session.nextMilestone}</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => joinSession(session.link || session.id)}
+                          className="rounded-lg bg-primary/20 border border-primary/40 px-3 py-1 text-sm text-primary transition hover:bg-primary/30"
+                        >
+                          Open Session
+                        </button>
+                        <button
+                          onClick={() => rejoinSession(session)}
+                          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
+                        >
+                          Rejoin
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -347,87 +467,7 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
-          {/* Quick Actions */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25, duration: 0.4, ease: 'easeOut' }}
-            className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl backdrop-blur"
-          >
-            <div className="flex items-center gap-3 mb-6">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-                <PlusIcon className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <h2 className="font-display text-xl text-white">Add New Mentee</h2>
-                <p className="text-sm text-slate-300">Expand your mentorship circle</p>
-              </div>
-            </div>
-            
-            <form onSubmit={handleAddConnection} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-name">
-                  Name
-                </label>
-                <input
-                  id="connection-name"
-                  name="name"
-                  value={connection.name}
-                  onChange={handleChange}
-                  placeholder="Jamie Chen"
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-email">
-                  Email
-                </label>
-                <input
-                  id="connection-email"
-                  name="email"
-                  type="email"
-                  value={connection.email}
-                  onChange={handleChange}
-                  placeholder="jamie@build.dev"
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60" htmlFor="connection-goal">
-                  Learning Goal
-                </label>
-                <textarea
-                  id="connection-goal"
-                  name="goal"
-                  rows={3}
-                  value={connection.goal}
-                  onChange={handleChange}
-                  placeholder="Master React fundamentals and build first portfolio project"
-                  className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              
-              {error && (
-                <p className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
-                  {error}
-                </p>
-              )}
-              {success && (
-                <p className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs text-accent">
-                  {success}
-                </p>
-              )}
-              
-              <button
-                type="submit"
-                className="w-full rounded-full bg-primary py-3 text-sm font-semibold text-white shadow-lg shadow-primary/30 transition hover:bg-primary/90"
-              >
-                Add Mentee
-              </button>
-            </form>
-          </motion.div>
+          {/* Quick Actions removed */}
         </section>
 
         {/* Completed & Ending Sessions */}
@@ -454,41 +494,48 @@ export default function DashboardPage() {
           
           <div className="grid gap-4 md:grid-cols-2">
             {completedSessions.map((session) => (
-              <div
-                key={session.id}
-                className="rounded-2xl border border-white/10 bg-slate-950/60 p-4"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="font-display text-lg text-white">{session.mentee}</h3>
-                    <p className="text-sm text-slate-300">{session.topic}</p>
+              <div key={session.id} className="flex">
+                <div className="w-full max-w-xl mx-auto rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="font-display text-lg text-white">{session.mentee}</h3>
+                      <p className="text-sm text-slate-300">{session.topic}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {[...Array(5)].map((_, i) => (
+                        <span
+                          key={i}
+                          className={`text-xs ${i < session.rating ? 'text-yellow-400' : 'text-slate-600'}`}
+                        >
+                          ★
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    {[...Array(5)].map((_, i) => (
-                      <span
-                        key={i}
-                        className={`text-xs ${i < session.rating ? 'text-yellow-400' : 'text-slate-600'}`}
-                      >
-                        ★
-                      </span>
-                    ))}
+                  
+                  <div className="space-y-2 text-sm text-slate-400 mb-3">
+                    <div className="flex items-center gap-2">
+                      <CalendarDaysIcon className="h-4 w-4" />
+                      <span>Completed {new Date(session.completedDate).toLocaleDateString()}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <ClockIcon className="h-4 w-4" />
+                      <span>Duration: {session.duration}</span>
+                    </div>
                   </div>
-                </div>
-                
-                <div className="space-y-2 text-sm text-slate-400 mb-3">
-                  <div className="flex items-center gap-2">
-                    <CalendarDaysIcon className="h-4 w-4" />
-                    <span>Completed {new Date(session.completedDate).toLocaleDateString()}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ClockIcon className="h-4 w-4" />
-                    <span>Duration: {session.duration}</span>
-                  </div>
-                </div>
 
-                <p className="text-sm text-slate-300 bg-slate-950/60 rounded-lg p-3 border border-white/10">
-                  <span className="text-accent font-medium">Outcome:</span> {session.outcome}
-                </p>
+                  <div className="flex items-center justify-between mt-4">
+                    <div className="text-xs text-slate-400">{session.duration}</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => viewStudents(session)}
+                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200"
+                      >
+                        View Students
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             ))}
 
@@ -512,6 +559,7 @@ export default function DashboardPage() {
           >
             <div className="flex items-center justify-between mb-6">
               <div>
+              
                 <h2 className="font-display text-xl text-white">Your Mentees</h2>
                 <p className="text-sm text-slate-300">People you are currently mentoring</p>
               </div>
@@ -545,6 +593,48 @@ export default function DashboardPage() {
               ))}
             </div>
           </motion.section>
+        )}
+
+        {/* Students slide-over panel (global) */}
+        {studentsPanelOpen && (
+          <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={closeStudentsPanel} />
+            <div className="relative w-full max-w-2xl rounded-t-xl md:rounded-xl bg-slate-950/95 border border-white/10 p-6 m-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Students who joined</h3>
+                  <p className="text-sm text-slate-400">Session: {studentsSession?.mentee || studentsSession?.link || studentsSession?.id}</p>
+                </div>
+                <div>
+                  <button onClick={closeStudentsPanel} className="rounded-lg bg-white/5 px-3 py-1 text-sm text-slate-200">Close</button>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                {studentsLoading && <p className="text-sm text-slate-400">Loading students…</p>}
+                {studentsError && <p className="text-sm text-red-400">{studentsError}</p>}
+                {!studentsLoading && !studentsError && studentsList.length === 0 && (
+                  <p className="text-sm text-slate-400">No students found for this session.</p>
+                )}
+
+                {!studentsLoading && studentsList.length > 0 && (
+                  <ul className="mt-3 space-y-3">
+                    {studentsList.map((s, i) => (
+                      <li key={i} className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-white font-medium">{s.student_name || 'Student'}</p>
+                            <p className="text-xs text-slate-400">{s.student_email || '—'}</p>
+                          </div>
+                          <div className="text-xs text-slate-400">{s.created_at ? new Date(s.created_at).toLocaleString() : ''}</div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

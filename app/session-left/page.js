@@ -1,8 +1,22 @@
 'use client';
 
 import Link from 'next/link';
+import { useAuth } from '@/components/AuthProvider';
+
+function isMentorUser(user) {
+  if (!user) return false;
+  // Accept multiple possible backend shapes: role, is_mentor, mentor boolean
+  if (user.role && String(user.role).toLowerCase() === 'mentor') return true;
+  if (user.is_mentor === true) return true;
+  if (user.mentor === true) return true;
+  // fallback: check common email/domain marker (not ideal, but harmless)
+  return false;
+}
 
 export default function SessionLeftPage() {
+  const { user } = useAuth() || {};
+  const showButtons = isMentorUser(user);
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 p-6">
       <div className="max-w-lg w-full p-8 rounded-2xl bg-slate-800/60 border border-white/10 text-center">
@@ -18,23 +32,29 @@ export default function SessionLeftPage() {
           or the homepage to find more sessions.
         </p>
 
-        <div className="mt-6 flex gap-3">
-          <Link
-            href="/dashboard"
-            className="flex-1 rounded-full bg-primary py-3 text-sm font-semibold text-white text-center shadow-md"
-          >
-            Go to dashboard
-          </Link>
+        {showButtons && (
+          <div className="mt-6 flex gap-3">
+            <Link
+              href="/dashboard"
+              className="flex-1 rounded-full bg-primary py-3 text-sm font-semibold text-white text-center shadow-md"
+            >
+              Go to dashboard
+            </Link>
 
-          <Link
-            href="/"
-            className="flex-1 rounded-full border border-white/20 py-3 text-sm font-semibold text-white text-center"
-          >
-            Back to home
-          </Link>
-        </div>
+            <Link
+              href="/"
+              className="flex-1 rounded-full border border-white/20 py-3 text-sm font-semibold text-white text-center"
+            >
+              Back to home
+            </Link>
+          </div>
+        )}
 
-        <p className="mt-4 text-xs text-slate-400">This page is not yet wired to session logic.</p>
+        {!showButtons && (
+          <div className="mt-6">
+            <p className="text-sm text-slate-400">Thanks for joining — explore other sessions on the homepage.</p>
+          </div>
+        )}
       </div>
     </div>
   );
