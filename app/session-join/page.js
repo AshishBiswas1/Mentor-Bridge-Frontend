@@ -55,8 +55,12 @@ function SessionJoinContent() {
       });
 
       const json = await res.json().catch(() => null);
+      
+      console.log('Join response:', { status: res.status, data: json });
+      
       if (!res.ok) {
-        setError(json?.message || 'Failed to join session');
+        const errorMsg = json?.message || json?.error || 'Failed to join session';
+        setError(errorMsg);
         setIsSubmitting(false);
         return;
       }
@@ -104,13 +108,15 @@ function SessionJoinContent() {
         <h1 className="font-display text-2xl text-white mb-2">Join a Session</h1>
         <p className="text-sm text-slate-400 mb-6">Enter your details and the session link to join as a student.</p>
 
-        <form suppressHydrationWarning onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="text-xs uppercase text-white/60">Full name</label>
             <input
+              type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Your name"
+              autoComplete="name"
               className="mt-2 w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
@@ -122,6 +128,7 @@ function SessionJoinContent() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
+              autoComplete="email"
               className="mt-2 w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
@@ -129,9 +136,11 @@ function SessionJoinContent() {
           <div>
             <label className="text-xs uppercase text-white/60">Session link</label>
             <input
+              type="text"
               value={link}
               onChange={(e) => setLink(e.target.value)}
-              placeholder="/session?id=xxxxx or https://example.com/session/xxxxx"
+              placeholder="Enter session link (e.g., abc123)"
+              autoComplete="off"
               className="mt-2 w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
