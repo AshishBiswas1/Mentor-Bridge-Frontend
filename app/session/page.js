@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, Suspense } from 'react';
+import { useEffect, useState, useRef, useMemo, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -16,6 +16,51 @@ import {
 import { useAuth } from '@/components/AuthProvider';
 import { monacoTheme } from '@/components/monaco-theme';
 
+// Camera and Mic toggle buttons with WebRTC controls
+function CameraButton({ isEnabled, onToggle, disabled }) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={disabled}
+      aria-pressed={isEnabled}
+      title={isEnabled ? 'Turn camera off' : 'Turn camera on'}
+      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80' : 'bg-red-600/80'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
+    >
+      {isEnabled ? (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M4 7h7a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V9a2 2 0 012-2z" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3l18 18M8 5h7a2 2 0 012 2v6a2 2 0 01-2 2h-1" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function MicButton({ isEnabled, onToggle, disabled }) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={disabled}
+      aria-pressed={isEnabled}
+      title={isEnabled ? 'Mute mic' : 'Unmute mic'}
+      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80' : 'bg-red-600/80'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
+    >
+      {isEnabled ? (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 1v11m0 0a3 3 0 003-3V5a3 3 0 10-6 0v4a3 3 0 003 3zM19 11a7 7 0 01-14 0" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3l18 18M9 5v6a3 3 0 006 0v-1" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
 const INITIAL_CODE = `# Welcome to your coding session!
@@ -29,43 +74,79 @@ if __name__ == "__main__":
     hello("Mentor")
 `;
 
-// The editor language is fixed to Python for sessions
-
 function SessionPageContent() {
+
+  // Router, auth and URL params
   const router = useRouter();
   const searchParams = useSearchParams();
-  const link = searchParams.get('link');
-  const [session, setSession] = useState(null);
-  const [error, setError] = useState('');
+  const link = (searchParams && typeof searchParams.get === 'function') ? (searchParams.get('link') || searchParams.get('session')) : null;
+
+  // Auth (include loading to avoid ReferenceError)
   const { user, loading } = useAuth();
-  const [guest, setGuest] = useState(null);
-  const [code, setCode] = useState(INITIAL_CODE);
-  const [language] = useState('python');
-  const [output, setOutput] = useState('');
-  const [isRunning, setIsRunning] = useState(false);
-  const [sessionStarted, setSessionStarted] = useState(false);
-  const [sessionTimer, setSessionTimer] = useState(0);
-  const [participants, setParticipants] = useState([]);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
-  const [showNewLinkModal, setShowNewLinkModal] = useState(false);
-  const [generatingNewLink, setGeneratingNewLink] = useState(false);
-  const [participantsLeft, setParticipantsLeft] = useState(new Set()); // Track which roles have left ("mentor" or "student")
-  const socketRef = useRef(null);
+
+  // Core refs and state used throughout the component
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
-  const codeRef = useRef(code);
-  const emitTimeout = useRef(null);
+  const selectionListenerRef = useRef(null);
+  const remoteCursorsRef = useRef({});
+
+  const socketRef = useRef(null);
+  const signalSocketRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const localParticipantNameRef = useRef(null);
+  const userRef = useRef(null);
+  const sessionRef = useRef(null);
+  const chatStudentNameRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const participantsRef = useRef([]);
+  const isMentorRef = useRef(false);
+  const iceCandidatesQueue = useRef([]);
+  const presenceRef = useRef({});
   const incrementedRef = useRef(false);
   const sessionIdRef = useRef(null);
-  const remoteCursorsRef = useRef({}); // { senderId: {decorationIds: [], colorIndex} }
-  const selectionListenerRef = useRef(null);
-  // Track explicit presence overrides when sockets inform us someone left/joined
-  // { mentorPresent: true|false|null, studentPresent: true|false|null }
-  const presenceRef = useRef({ mentorPresent: null, studentPresent: null });
-  const [codeLoaded, setCodeLoaded] = useState(false); // Track if code has been loaded from storage/backend
+  const isNegotiatingRef = useRef(false);
 
-  // Decrement helpers: ensure we only call decrement once per client
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const remoteMutedRef = useRef(true);
+
+  const codeRef = useRef(INITIAL_CODE);
+  const emitTimeout = useRef(null);
+
+  const [guest, setGuest] = useState(null);
+  const [session, setSession] = useState(null);
+  const [participants, setParticipants] = useState([]);
+  const [participantsLeft, setParticipantsLeft] = useState(new Set());
+  const [code, setCode] = useState(INITIAL_CODE);
+  const [codeLoaded, setCodeLoaded] = useState(false);
+
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [micEnabled, setMicEnabled] = useState(true);
+
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [remoteMuted, setRemoteMuted] = useState(true);
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+
+  // Keep refs in sync with latest state so external socket handlers can read current values
+  useEffect(() => { userRef.current = user; }, [user]);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+  useEffect(() => { participantsRef.current = participants; }, [participants]);
+  // Note: isMentorRef is synced after `isMentor` is declared to avoid temporal dead zone
+  const [isRunning, setIsRunning] = useState(false);
+  const [output, setOutput] = useState('');
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [sessionTimer, setSessionTimer] = useState(0);
+  const [error, setError] = useState(null);
+  const [showNewLinkModal, setShowNewLinkModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [generatingNewLink, setGeneratingNewLink] = useState(false);
+  const [language, setLanguage] = useState('python');
+
+  // Synchronous best-effort decrement for unload handlers
   const decrementIfNeededSync = () => {
     try {
       const sid = sessionIdRef.current;
@@ -73,13 +154,8 @@ function SessionPageContent() {
         if (navigator && typeof navigator.sendBeacon === 'function') {
           navigator.sendBeacon(`${BASE}/session/decrement/${sid}`);
         } else {
-          try {
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', `${BASE}/session/decrement/${sid}`, false);
-            xhr.send(null);
-          } catch (e) {
-            // ignore
-          }
+          // fire-and-forget
+          fetch(`${BASE}/session/decrement/${sid}`, { method: 'POST' }).catch(() => {});
         }
         incrementedRef.current = false;
         sessionIdRef.current = null;
@@ -103,7 +179,7 @@ function SessionPageContent() {
   };
 
   // Determine whether current authenticated user is the mentor for this session
-  const isMentor = (() => {
+  const isMentor = useMemo(() => {
     try {
       if (!user || !session) return false;
       const uid = user.id || user._id || null;
@@ -114,8 +190,21 @@ function SessionPageContent() {
       if (session.mentor_email && user.email && session.mentor_email === user.email) return true;
       if (session.mentor_name && user.name && session.mentor_name === user.name) return true;
       return false;
-    } catch (e) { return false; }
-  })();
+    } catch (e) { 
+      return false; 
+    }
+  }, [user, session]);
+
+  // Keep isMentorRef in sync after `isMentor` is available
+  useEffect(() => { isMentorRef.current = isMentor; }, [isMentor]);
+
+  // Keep remote muted ref in sync so handlers inside PC can read latest value
+  useEffect(() => {
+    remoteMutedRef.current = remoteMuted;
+    try {
+      if (remoteVideoRef.current) remoteVideoRef.current.muted = !!remoteMuted;
+    } catch (e) {}
+  }, [remoteMuted]);
 
   // Helper: Save code to localStorage for this session
   const saveCodeToStorage = (sessionLink, codeContent) => {
@@ -140,6 +229,569 @@ function SessionPageContent() {
       console.warn('Failed to load code from localStorage', e);
     }
     return null;
+  };
+
+  // WebRTC Helper Functions
+  const initializeMedia = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+      stream.getTracks().forEach(track => {
+      });
+      
+      setLocalStream(stream);
+      
+      // Attach to local video element
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+      
+      return stream;
+    } catch (error) {
+      console.error('Error accessing media devices:', error);
+      // Try audio only if video fails
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: true
+        });
+        setLocalStream(audioStream);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = audioStream;
+        }
+        setCameraEnabled(false);
+        return audioStream;
+      } catch (audioError) {
+        console.error('Error accessing audio:', audioError);
+        return null;
+      }
+    }
+  };
+
+  const createPeerConnection = () => {
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    const pc = new RTCPeerConnection(configuration);
+
+    // NOTE: Do not pre-create transceivers here — let addTrack()/createOffer()/createAnswer()
+    // establish m-lines dynamically. Pre-creating transceivers can accidentally lock
+    // directions and lead to muted receivers if the timing differs between peers.
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        const payload = { link, candidate: event.candidate };
+        if (signalSocketRef.current && signalSocketRef.current.connected) {
+          const room = (session && (session.link || session.id)) || link;
+          signalSocketRef.current.emit('ice-candidate', { room, ...payload });
+        } else if (socketRef.current) {
+          socketRef.current.emit('ice-candidate', payload);
+        }
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'connected') {
+        
+      } else if (pc.iceConnectionState === 'failed') {
+        
+      }
+    };
+
+    pc.ontrack = (event) => {
+      const trackKind = event.track ? event.track.kind : 'unknown';
+      
+      
+      if (event.streams && event.streams[0]) {
+        const tracks = event.streams[0].getTracks();
+        setRemoteStream(event.streams[0]);
+        
+        if (remoteVideoRef.current) {
+          try {
+            remoteVideoRef.current.muted = !!remoteMutedRef.current;
+            remoteVideoRef.current.srcObject = event.streams[0];
+            
+            const playResult = remoteVideoRef.current.play();
+            if (playResult && typeof playResult.then === 'function') {
+              playResult
+                .then(() => {})
+                .catch(err => console.error('❌ Remote video play failed:', err.message));
+            }
+          } catch (e) { 
+            console.error('❌ Error attaching remote stream:', e.message); 
+          }
+        }
+      } else if (event.track) {
+        const s = new MediaStream([event.track]);
+        
+        setRemoteStream(s);
+        
+        if (remoteVideoRef.current) {
+          try {
+            remoteVideoRef.current.muted = !!remoteMutedRef.current;
+            remoteVideoRef.current.srcObject = s;
+            const playResult = remoteVideoRef.current.play();
+            if (playResult && typeof playResult.then === 'function') {
+              playResult
+                .then(() => {})
+                .catch(err => console.error('❌ Remote video play failed:', err.message));
+            }
+          } catch (e) { 
+            console.error('❌ Error attaching single track:', e.message); 
+          }
+        }
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        setIsConnecting(false);
+        isNegotiatingRef.current = false;
+      } else if (pc.connectionState === 'failed') {
+        console.error('❌ Peer connection failed');
+        setIsConnecting(false);
+        isNegotiatingRef.current = false;
+      } else if (pc.connectionState === 'disconnected') {
+        
+        setIsConnecting(false);
+        isNegotiatingRef.current = false;
+      }
+    };
+
+    return pc;
+  };
+
+  const startCall = async () => {
+    try {
+      setIsConnecting(true);
+      
+      const stream = localStream || await initializeMedia();
+      if (!stream) {
+        setIsConnecting(false);
+        return;
+      }
+
+      const pc = createPeerConnection();
+      peerConnectionRef.current = pc;
+
+      // Add mentor's local tracks to peer connection
+      
+      stream.getTracks().forEach(track => {
+        try {
+          // Ensure track is enabled and check muted state
+          track.enabled = true;
+          
+          pc.addTrack(track, stream);
+        } catch (e) {
+          console.error(`❌ Failed to add ${track.kind} track:`, e.message);
+        }
+      });
+
+      // Create and send offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      isNegotiatingRef.current = true;
+
+      // Prefer signaling namespace for multi-room support
+      try {
+        const room = (session && (session.link || session.id)) || link;
+        if (signalSocketRef.current && signalSocketRef.current.connected) {
+          signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
+        } else if (socketRef.current) {
+          socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
+        }
+      } catch (e) { console.error('❌ Failed to send offer:', e.message); }
+    } catch (error) {
+      console.error('Error starting call:', error);
+      setIsConnecting(false);
+      isNegotiatingRef.current = false;
+    }
+  };
+
+  const handleWebRTCOffer = async (payload) => {
+    try {
+      
+      // Accept offers that match either the link field or the room field
+      const room = (session && (session.link || session.id)) || link;
+      const matches = payload && (payload.link === link || payload.room === room || payload.link === room);
+      if (!payload || !matches) {
+        return;
+      }
+      
+      setIsConnecting(true);
+      
+      const stream = localStream || await initializeMedia();
+      if (!stream) {
+        setIsConnecting(false);
+        return;
+      }
+
+      const pc = createPeerConnection();
+      peerConnectionRef.current = pc;
+
+      // Set remote description FIRST (required for proper negotiation)
+      await pc.setRemoteDescription(new RTCSessionDescription(payload.offer));
+
+      // Add local tracks to peer connection
+      stream.getTracks().forEach(track => {
+        try {
+          // Ensure track is enabled and check muted state
+          track.enabled = true;
+          
+          pc.addTrack(track, stream);
+        } catch (e) {
+          console.error(`❌ Failed to add ${track.kind} track:`, e.message);
+        }
+      });
+
+      // Create and send answer
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      try {
+        const room = (session && (session.link || session.id)) || link;
+        if (signalSocketRef.current && signalSocketRef.current.connected) {
+          signalSocketRef.current.emit('answer', { room, link, answer: pc.localDescription });
+        } else if (socketRef.current) {
+          socketRef.current.emit('webrtc-answer', { link, answer: pc.localDescription });
+        }
+      } catch (e) { console.error('❌ Failed to send answer:', e.message); }
+
+      // Process queued ICE candidates
+      while (iceCandidatesQueue.current.length > 0) {
+        const candidate = iceCandidatesQueue.current.shift();
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding queued ICE candidate:', e);
+        }
+      }
+    } catch (error) {
+      console.error('Error handling WebRTC offer:', error);
+      setIsConnecting(false);
+      isNegotiatingRef.current = false;
+    }
+  };
+
+  const handleWebRTCAnswer = async (payload) => {
+    try {
+      
+      const room = (session && (session.link || session.id)) || link;
+      const matches = payload && (payload.link === link || payload.room === room || payload.link === room);
+      if (!payload || !matches) {
+        return;
+      }
+      
+      const pc = peerConnectionRef.current;
+      if (!pc) return;
+
+      // Only process answer if we're in a state that expects one
+      if (pc.signalingState !== 'have-local-offer') {
+        return;
+      }
+
+      await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+      isNegotiatingRef.current = false;
+
+      // Diagnostic: log receivers and their track states immediately after setting remote description
+      try {
+        const receivers = pc.getReceivers ? pc.getReceivers() : [];
+        receivers.forEach((r, i) => {
+          const t = r && r.track;
+        });
+      } catch (e) {
+        console.warn('Could not inspect receivers:', e && e.message);
+      }
+
+      // Process queued ICE candidates
+      while (iceCandidatesQueue.current.length > 0) {
+        const candidate = iceCandidatesQueue.current.shift();
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding queued ICE candidate:', e);
+        }
+      }
+      
+      // pc.ontrack will fire automatically - no need to manually check for tracks
+    } catch (error) {
+      console.error('Error handling WebRTC answer:', error);
+    }
+  };
+
+  const handleICECandidate = async (payload) => {
+    try {
+      const room = (session && (session.link || session.id)) || link;
+      const matches = payload && (payload.link === link || payload.room === room || payload.link === room);
+      if (!payload || !matches) {
+        return;
+      }
+      
+      const pc = peerConnectionRef.current;
+      
+      if (!pc || !pc.remoteDescription) {
+        // Queue the candidate if peer connection isn't ready
+        iceCandidatesQueue.current.push(payload.candidate);
+        return;
+      }
+
+      await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+    } catch (error) {
+      console.error('Error handling ICE candidate:', error);
+    }
+  };
+
+  const toggleCamera = async () => {
+    const pc = peerConnectionRef.current;
+
+    if (cameraEnabled) {
+      // Turn camera OFF - disable video track but keep it in the stream
+      try {
+        if (localStream) {
+          const videoTrack = localStream.getVideoTracks()[0];
+          if (videoTrack) {
+            try { videoTrack.enabled = false; } catch (e) {}
+            setCameraEnabled(false);
+
+            if (pc) {
+              try {
+                const senders = pc.getSenders ? pc.getSenders() : [];
+                for (const sender of senders) {
+                  if (sender && sender.track && sender.track.kind === 'video') {
+                    try { sender.track.enabled = false; } catch (e) {}
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (err) {
+        console.error('❌ Error turning camera off:', err.message);
+      }
+    } else {
+      // Turn camera ON - enable existing track or acquire new one
+      try {
+        // First, try to re-enable existing video track
+        if (localStream) {
+          const existingVideoTrack = localStream.getVideoTracks()[0];
+          if (existingVideoTrack && existingVideoTrack.readyState === 'live') {
+            try { existingVideoTrack.enabled = true; } catch (e) {}
+            setCameraEnabled(true);
+
+            // Re-enable in peer connection
+            if (pc) {
+              const senders = pc.getSenders ? pc.getSenders() : [];
+              for (const sender of senders) {
+                if (sender && sender.track && sender.track.kind === 'video') {
+                  try { sender.track.enabled = true; } catch (e) {}
+                }
+              }
+            }
+            return;
+          }
+        }
+
+        // If no existing track or track is stopped, acquire new camera
+        const videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const newVideoTrack = videoStream.getVideoTracks()[0];
+
+        if (!newVideoTrack) {
+          throw new Error('No video track obtained');
+        }
+
+        // Ensure we have a localStream object
+        let currentStream = localStream;
+        if (!currentStream) {
+          currentStream = new MediaStream();
+          setLocalStream(currentStream);
+        }
+
+        // Remove old video tracks and add new one
+        try {
+          currentStream.getVideoTracks().forEach(track => {
+            try { currentStream.removeTrack(track); } catch (e) {}
+            try { track.stop(); } catch (e) {}
+          });
+        } catch (e) {}
+        currentStream.addTrack(newVideoTrack);
+        setLocalStream(currentStream);
+
+        // Update video element
+        if (localVideoRef.current) {
+          try { localVideoRef.current.srcObject = currentStream; } catch (e) { console.warn(e); }
+        }
+
+        // Attach to peer connection
+        if (pc) {
+          const senders = pc.getSenders ? pc.getSenders() : [];
+          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+
+          let renegotiationNeeded = false;
+
+          if (videoSender && typeof videoSender.replaceTrack === 'function') {
+            try {
+              await videoSender.replaceTrack(newVideoTrack);
+            } catch (e) {
+              try { pc.addTrack(newVideoTrack, currentStream); } catch (err) {}
+              renegotiationNeeded = true;
+            }
+          } else {
+            try { pc.addTrack(newVideoTrack, currentStream); } catch (err) {}
+            renegotiationNeeded = true;
+          }
+
+          // Renegotiate if we added a new track
+          if (renegotiationNeeded && !isNegotiatingRef.current) {
+            try {
+              isNegotiatingRef.current = true;
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              const room = (session && (session.link || session.id)) || link;
+              if (signalSocketRef.current && signalSocketRef.current.connected) {
+                signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
+              } else if (socketRef.current) {
+                socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
+              }
+            } catch (e) {
+            } finally {
+              isNegotiatingRef.current = false;
+            }
+          }
+        }
+
+        setCameraEnabled(true);
+
+      } catch (error) {
+        console.error('Error restarting camera:', error);
+        alert('Failed to access camera. Please check permissions.');
+      }
+    }
+  };
+
+  const toggleMic = async () => {
+    const pc = peerConnectionRef.current;
+    
+    if (micEnabled) {
+      // Turn mic OFF - just disable the audio track
+      try {
+        if (localStream) {
+          const audioTrack = localStream.getAudioTracks()[0];
+          if (audioTrack) {
+            try { audioTrack.enabled = false; } catch (e) {}
+            setMicEnabled(false);
+          }
+        }
+      } catch (e) {
+        console.error('❌ Error muting mic:', e.message);
+      }
+    } else {
+      // Turn mic ON - enable existing track or acquire new one
+      try {
+        // Try to re-enable existing audio track
+        if (localStream) {
+          const existingAudioTrack = localStream.getAudioTracks()[0];
+          if (existingAudioTrack && existingAudioTrack.readyState === 'live') {
+            try { existingAudioTrack.enabled = true; } catch (e) {}
+            setMicEnabled(true);
+            return;
+          }
+        }
+
+        // If no existing track, acquire new microphone
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const newAudioTrack = audioStream.getAudioTracks()[0];
+
+        if (!newAudioTrack) {
+          throw new Error('No audio track obtained');
+        }
+
+        // Ensure we have a MediaStream
+        let currentStream = localStream;
+        if (!currentStream) {
+          currentStream = new MediaStream();
+          setLocalStream(currentStream);
+        }
+
+        // Remove old audio tracks and add new one
+        try {
+          currentStream.getAudioTracks().forEach(track => {
+            try { currentStream.removeTrack(track); } catch (e) {}
+            try { track.stop(); } catch (e) {}
+          });
+        } catch (e) {}
+        currentStream.addTrack(newAudioTrack);
+        setLocalStream(currentStream);
+
+        // Attach to peer connection
+        if (pc) {
+          const senders = pc.getSenders ? pc.getSenders() : [];
+          const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+
+          let renegotiationNeeded = false;
+
+          if (audioSender && typeof audioSender.replaceTrack === 'function') {
+            try {
+              await audioSender.replaceTrack(newAudioTrack);
+            } catch (e) {
+              console.warn('replaceTrack failed for audio, adding new track:', e);
+              try { pc.addTrack(newAudioTrack, currentStream); } catch (err) { console.warn('addTrack failed', err); }
+              renegotiationNeeded = true;
+            }
+          } else {
+            try { pc.addTrack(newAudioTrack, currentStream); } catch (err) { console.warn('addTrack failed', err); }
+            renegotiationNeeded = true;
+          }
+
+          // Renegotiate if needed
+          if (renegotiationNeeded && !isNegotiatingRef.current) {
+            try {
+              isNegotiatingRef.current = true;
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+
+              const room = (session && (session.link || session.id)) || link;
+              if (signalSocketRef.current && signalSocketRef.current.connected) {
+                signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
+              } else if (socketRef.current) {
+                socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
+              }
+            } catch (e) {
+              console.warn('Failed to renegotiate after adding audio track', e);
+            } finally {
+              isNegotiatingRef.current = false;
+            }
+          }
+        }
+
+        setMicEnabled(true);
+
+      } catch (e) {
+        console.error('Error enabling mic:', e);
+        alert('Failed to access microphone: ' + (e && e.message));
+      }
+    }
+  };
+
+  const cleanupWebRTC = () => {
+    // Stop all tracks
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+    
+    // Close peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    
+    setLocalStream(null);
+    setRemoteStream(null);
   };
 
   useEffect(() => {
@@ -261,6 +913,14 @@ function SessionPageContent() {
     const socket = io(BASE);
     socketRef.current = socket;
 
+    // Separate signaling namespace for multi-room video signaling
+    try {
+      const signal = io(BASE + '/signal');
+      signalSocketRef.current = signal;
+    } catch (e) {
+      console.warn('Failed to connect to signaling namespace', e);
+    }
+
     socket.on('connect', () => {
       socket.emit('join-session', link);
     });
@@ -268,6 +928,29 @@ function SessionPageContent() {
     socket.on('session-joined', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
       setSession(sessionData || null);
+      // Join signaling room for video calls when session data is available
+      try {
+        const room = (sessionData && (sessionData.link || sessionData.id)) || link;
+        const name = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+          if (signalSocketRef.current && room) {
+              // persist the local display name so role-checking can fallback to name matches
+              try { localParticipantNameRef.current = name; } catch (e) {}
+              signalSocketRef.current.emit('joinRoom', { room, studentName: name });
+          }
+
+          // Determine a stable studentName for chat room membership. Prefer session's student_name when available,
+          // otherwise fall back to the session link so both mentor and student compute the same identifier.
+          const chatStudentName = (sessionData && (sessionData.student_name || sessionData.studentName)) || link;
+          chatStudentNameRef.current = chatStudentName;
+
+          // Join chat room on the main socket namespace using a canonical room key (session.link || session.id || query link)
+          try {
+            if (socketRef.current && room) {
+              const canonicalRoom = (sessionData && (sessionData.link || sessionData.id)) || link || room;
+              socketRef.current.emit('joinSession', { sessionId: sessionData?.id || canonicalRoom, studentName: chatStudentName, user: name, link: sessionData?.link || link, room: canonicalRoom });
+            }
+          } catch (e) {}
+      } catch (e) {}
       
       // Load code with priority: localStorage > backend > INITIAL_CODE
       if (!codeLoaded) {
@@ -444,6 +1127,28 @@ function SessionPageContent() {
       } catch (e) {}
     });
 
+    // Chat message received from server (either from DB insert or relay)
+    socket.on('receiveMessage', (msg) => {
+      try {
+        if (!msg) return;
+        // Normalize message object shape
+        const normalized = {
+          id: msg.id || msg._id || `${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+          user: msg.user_name || msg.user || msg.userName || 'participant',
+          content: msg.content || msg.message || msg.text || '',
+          type: msg.type || 'text',
+          created_at: msg.created_at || new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, normalized]);
+      } catch (e) {}
+    });
+
+    socket.on('errorMessage', (payload) => {
+      try {
+        // Optionally show errors to user — for now, ignore or could display toast
+      } catch (e) {}
+    });
+
     socket.on('run-start', (payload) => {
       try {
         if (!payload || payload.link !== link) return;
@@ -474,6 +1179,44 @@ function SessionPageContent() {
       } catch (e) {}
       window.location.href = '/session-left';
     });
+
+    // WebRTC signaling listeners
+    socket.on('webrtc-offer', handleWebRTCOffer);
+    socket.on('webrtc-answer', handleWebRTCAnswer);
+    socket.on('ice-candidate', handleICECandidate);
+
+    // Also listen on the signaling namespace (if present)
+    if (signalSocketRef.current) {
+      const s = signalSocketRef.current;
+      s.on('connect', () => {
+        // join a room specific to this session when signaling socket connects
+        try {
+          const room = (session && (session.link || session.id)) || link;
+          const name = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+          if (room) s.emit('joinRoom', { room, studentName: name });
+        } catch (e) {}
+      });
+
+      s.on('offer', handleWebRTCOffer);
+      s.on('answer', handleWebRTCAnswer);
+      s.on('ice-candidate', handleICECandidate);
+      
+      // When another participant joins, mentor should initiate the call
+      s.on('participant-ready', (payload) => {
+        
+        try {
+          const localIsMentor = isMentorRef.current;
+          const pc = peerConnectionRef.current;
+          const isNeg = isNegotiatingRef.current;
+
+          if (localIsMentor && !pc && !isNeg) {
+            setTimeout(() => startCall(), 500);
+          }
+        } catch (e) {
+          console.error('❌ Error in participant-ready:', e.message);
+        }
+      });
+    }
 
     // fetch session data from backend
     fetch(`${BASE}/session?link=${encodeURIComponent(link)}`)
@@ -551,8 +1294,99 @@ function SessionPageContent() {
       try {
         if (socket && typeof socket.disconnect === 'function') socket.disconnect();
       } catch (e) {}
+      try {
+        if (signalSocketRef.current && typeof signalSocketRef.current.disconnect === 'function') signalSocketRef.current.disconnect();
+      } catch (e) {}
+      cleanupWebRTC();
     };
   }, [link]);
+
+  // Initialize WebRTC when session is loaded
+  useEffect(() => {
+    if (session && link && !localStream) {
+      initializeMedia();
+    }
+
+    return () => {
+      // Cleanup on unmount
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [session, link]);
+
+  // Update video elements when streams change
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      
+      // Diagnostic: check track states
+      const tracks = remoteStream.getTracks();
+      
+      try {
+        // Ensure muted state is applied before attempting autoplay to satisfy browser policies
+        // Temporarily force unmuted to test if muting is causing issues
+        remoteVideoRef.current.muted = false;
+        remoteVideoRef.current.srcObject = remoteStream;
+        
+        
+        const attemptPlay = () => {
+          const playResult = remoteVideoRef.current.play();
+          if (playResult && typeof playResult.then === 'function') {
+            playResult
+              .then(() => {})
+              .catch(err => {
+                console.error('❌ Remote video play failed (from useEffect):', err.message);
+                // Retry after a short delay if autoplay was blocked
+                if (err.name === 'NotAllowedError') {
+                  
+                }
+              });
+          } else {
+            
+          }
+        };
+        
+        // If readyState is low, wait for loadedmetadata with timeout
+        if (remoteVideoRef.current.readyState < 2) {
+          
+          let handled = false;
+          
+          const metadataHandler = () => {
+            if (handled) return;
+            handled = true;
+            attemptPlay();
+          };
+          
+          remoteVideoRef.current.addEventListener('loadedmetadata', metadataHandler, { once: true });
+          
+          // Fallback: if metadata doesn't load in 2 seconds, try play anyway
+          setTimeout(() => {
+            if (!handled) {
+              handled = true;
+              remoteVideoRef.current.removeEventListener('loadedmetadata', metadataHandler);
+              attemptPlay();
+            }
+          }, 2000);
+          
+          // Force load
+          try {
+            remoteVideoRef.current.load();
+          } catch (e) {
+          }
+        } else {
+          attemptPlay();
+        }
+      } catch (e) {
+        console.error('❌ Error in remoteStream useEffect:', e.message);
+      }
+    }
+  }, [remoteStream, remoteMuted]);
 
   // ensure participant count is decremented on unload/unmount
   useEffect(() => {
@@ -642,6 +1476,7 @@ function SessionPageContent() {
             // Silent fail - localStorage is the fallback
           });
         }
+        emitTimeout.current = null;
       }, 2000); // 2 second debounce for auto-save
     } catch (e) {}
   };
@@ -1114,8 +1949,8 @@ function SessionPageContent() {
 
       <div className="flex h-[calc(100vh-4rem)]">
         {/* Participants Sidebar */}
-        <aside className="w-64 border-r border-white/10 bg-slate-950/60 p-4">
-          <div className="space-y-4">
+        <aside className="w-64 border-r border-white/10 bg-slate-950/60 p-4 flex flex-col">
+          <div className="space-y-4 flex-1 overflow-y-auto">
             <div>
               <h3 className="text-sm font-semibold text-white">Participants</h3>
               <p className="text-xs text-slate-400">Active in this session</p>
@@ -1171,12 +2006,83 @@ function SessionPageContent() {
               )}
             </div>
 
-            {/* Invite button removed — sharing handled elsewhere */}
-          </div>
-        </aside>
+              {/* Invite button removed — sharing handled elsewhere */}
+            </div>
 
-        {/* Main Content */}
-        <main className="flex flex-1 flex-col">
+            {/* Video / call box sits at bottom of the participants panel and spans full width */}
+            <div className="mt-auto">
+              <div className="w-full rounded-xl border border-white/10 bg-black/60 shadow-lg">
+                <div className="p-2">
+                  {/* Remote video stream */}
+                  <div className="relative h-32 w-full overflow-hidden rounded-md bg-slate-900">
+                    {remoteStream ? (
+                      <video
+                        ref={remoteVideoRef}
+                        autoPlay
+                        playsInline
+                        muted={remoteMuted}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">
+                        {isConnecting ? 'Connecting...' : 'Waiting for remote video'}
+                      </div>
+                    )}
+                    {/* Unmute toggle: allow user to enable remote audio after autoplay */}
+                    {remoteStream && (
+                      <div className="absolute top-2 right-2">
+                        <button
+                          onClick={() => {
+                            try {
+                              const next = !remoteMuted;
+                              setRemoteMuted(next);
+                              if (remoteVideoRef.current) remoteVideoRef.current.muted = next;
+                            } catch (e) {}
+                          }}
+                          className="rounded-full bg-black/60 px-2 py-1 text-xs text-slate-200 border border-white/10"
+                          title={remoteMuted ? 'Unmute remote audio' : 'Mute remote audio'}
+                        >
+                          {remoteMuted ? 'Unmute' : 'Mute'}
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* Local video (Picture-in-Picture) */}
+                    {localStream && (
+                      <div className="absolute bottom-2 right-2 h-16 w-20 overflow-hidden rounded-md border border-white/20 bg-slate-900">
+                        <video
+                          ref={localVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="h-full w-full object-cover mirror"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Status info */}
+                  <div className="mt-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={`h-2 w-2 rounded-full ${remoteStream ? 'bg-green-500' : 'bg-slate-600'}`} />
+                      <div className="text-xs text-slate-400">
+                        {remoteStream ? 'Connected' : isConnecting ? 'Connecting...' : 'Not connected'}
+                      </div>
+                    </div>
+                    {localStream && (
+                      <div className="flex items-center gap-1 text-xs text-slate-400">
+                        <div className={`h-2 w-2 rounded-full ${cameraEnabled ? 'bg-green-500' : 'bg-red-500'}`} />
+                        <div className={`h-2 w-2 rounded-full ${micEnabled ? 'bg-green-500' : 'bg-red-500'}`} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          {/* Main Content */}
+          <main className="flex-1 flex flex-col">
           {/* Editor Controls */}
           <div className="flex h-12 items-center justify-between border-b border-white/10 bg-slate-950/40 px-4">
             <div className="flex items-center gap-4">
@@ -1250,6 +2156,144 @@ function SessionPageContent() {
             </div>
           </div>
         </main>
+
+        {/* Right-side chat panel */}
+        <aside
+          className="w-80 border-l border-white/10 bg-slate-950/60 p-4 flex flex-col"
+          onClick={() => { try { if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
+        >
+          <div className="mb-3">
+            <h3 className="text-sm font-semibold text-white">Chat</h3>
+            <p className="text-xs text-slate-400">Session chat</p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto rounded-lg border border-white/6 bg-slate-900/40 p-3">
+            {/* messages list */}
+            <div className="flex flex-col gap-3">
+              {messages.length === 0 ? (
+                <div className="text-xs text-slate-400">No messages yet</div>
+              ) : (
+                messages.map((m) => (
+                  <div key={m.id} className="text-sm">
+                    <div className="text-xs text-slate-400">{m.user}</div>
+                    <div className="mt-1 rounded-md bg-slate-800/60 px-3 py-2 text-slate-100">{m.content}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="flex items-center gap-2" onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}>
+              <input
+                type="text"
+                placeholder="Type a message..."
+                value={chatInput}
+                ref={chatInputRef}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const text = chatInput && chatInput.trim();
+                    if (!text) return;
+                    const sessionId = session?.id || link;
+                    const canonicalRoom = session?.link || session?.id || link;
+                    const studentName = chatStudentNameRef.current || session?.student_name || link;
+                    const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+                    const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
+                    try {
+                      // optimistic append
+                      setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
+                      if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
+                    } catch (e) {}
+                    setChatInput('');
+                  }
+                }}
+                onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
+                onFocus={(e) => { try { e.stopPropagation(); } catch (e) {} }}
+                autoFocus={false}
+                tabIndex={0}
+                style={{ zIndex: 50, position: 'relative', pointerEvents: 'auto' }}
+                className="flex-1 rounded-lg bg-slate-900/60 border border-white/10 px-3 py-2 text-sm text-slate-100"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const text = chatInput && chatInput.trim();
+                  if (!text) return;
+                  const sessionId = session?.id || link;
+                  const canonicalRoom = session?.link || session?.id || link;
+                  const studentName = chatStudentNameRef.current || session?.student_name || link;
+                  const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+                  const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
+                  try {
+                    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
+                    if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
+                  } catch (e) {}
+                  setChatInput('');
+                }}
+                className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white"
+                style={{ pointerEvents: 'auto', zIndex: 60 }}
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      {/* (video placeholder moved into participants sidebar; fixed duplicate removed) */}
+
+      {/* Bottom control strip with camera/mic buttons */}
+      <div className="fixed left-0 right-0 bottom-0 z-50">
+        <div className="mx-auto max-w-4xl px-4">
+          <div className="rounded-t-xl bg-slate-900/70 border-t border-white/5 py-3 shadow-xl backdrop-blur-sm">
+            <div className="flex items-center justify-center gap-4">
+              {/* Camera toggle */}
+              <CameraButton 
+                isEnabled={cameraEnabled} 
+                onToggle={toggleCamera}
+                disabled={false}
+              />
+
+              {/* Mic toggle */}
+              <MicButton 
+                isEnabled={micEnabled} 
+                onToggle={toggleMic}
+                disabled={false}
+              />
+              
+              {/* Connection status indicator */}
+              {isConnecting && (
+                <div className="ml-4 flex items-center gap-2 text-sm text-slate-300">
+                  <div className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+                  <span>Connecting...</span>
+                </div>
+              )}
+              {/* Quick debug button logs senders/transceivers and local tracks to console */}
+              <button
+                onClick={async () => {
+                  try {
+                    const pc = peerConnectionRef.current;
+                    const senders = pc && pc.getSenders ? pc.getSenders().map(s => ({ id: s && s.track ? s.track.id : null, kind: s && s.track ? s.track.kind : null, readyState: s && s.track ? s.track.readyState : null })) : [];
+                    const transceivers = pc && pc.getTransceivers ? pc.getTransceivers().map(t => ({ mid: t.mid, direction: t.direction, senderKind: t.sender && t.sender.track ? t.sender.track.kind : null, senderReadyState: t.sender && t.sender.track ? t.sender.track.readyState : null })) : [];
+                    const local = localStream ? { audio: localStream.getAudioTracks().map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })), video: localStream.getVideoTracks().map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) } : { audio: [], video: [] };
+                    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+                    console.group('WebRTC Debug');
+                    console.groupEnd();
+                    alert(`Debug info logged to console. senders=${senders.length}, transceivers=${transceivers.length}, localVideo=${local.video.length}`);
+                  } catch (e) {
+                    alert('Failed to gather debug info: ' + (e && e.message));
+                  }
+                }}
+                className="ml-3 rounded px-3 py-2 text-xs bg-white/5 text-white"
+                title="Log WebRTC debug info to console"
+              >
+                Debug
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
