@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { Button } from './ui/Button';
+import { useAuth } from './AuthProvider';
 
 const container = {
   hidden: { opacity: 0 },
@@ -44,7 +45,12 @@ export function Hero() {
             Mentor Bridge pairs ambitious students with world-class developers for live, guided sessions that accelerate skill growth and confidence.
           </motion.p>
           <motion.div variants={item} className="flex flex-col gap-3 sm:flex-row">
-            <Button href="/signup">Start free trial</Button>
+            {(() => {
+              const { user } = useAuth() || {};
+              const btnLabel = user ? 'Dashboard' : 'Start free trial';
+              const btnHref = user ? '/dashboard' : '/signup';
+              return <Button href={btnHref}>{btnLabel}</Button>;
+            })()}
             <Button href="#features" variant="secondary">
               Explore features
             </Button>
@@ -70,35 +76,32 @@ export function Hero() {
           <div className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur">
             <div className="absolute inset-x-8 top-0 h-[2px] animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent" />
             <div className="space-y-4">
-                <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between">
                 <div>
-                  <p className="font-display text-xl text-white">React Debugging Live</p>
+                  <p className="font-display text-xl text-white">Mentor Bridge</p>
+                  <p className="mt-1 text-xs text-slate-400">Live 1-on-1 coding mentorship</p>
                 </div>
-                <span className="rounded-full bg-accent/20 px-3 py-1 text-xs text-accent">In 2h</span>
+                <span className="rounded-full bg-accent/20 px-3 py-1 text-xs text-accent">1-on-1</span>
               </div>
+
               <div className="rounded-2xl bg-slate-950/60 p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-white/40">Agenda</p>
-                <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                  <li>• Profiling performance bottlenecks</li>
-                  <li>• Refactoring complex hooks</li>
-                  <li>• Deployment best practices</li>
-                </ul>
+                <p className="text-sm text-slate-200">Mentor Bridge connects you with expert developers for hands-on, live coding sessions. Work together in a collaborative editor, run and debug code in real time, and leave with concrete next steps.</p>
               </div>
+
               <div className="grid gap-3 rounded-2xl bg-white/5 p-4 text-sm text-slate-100">
                 <div className="flex items-center justify-between">
-                  <span>Mentor</span>
-                  <span className="font-medium text-white">Alex Rivera</span>
+                  <span>Live coding</span>
+                  <span className="font-medium text-white">Pair-program together</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Focus</span>
-                  <span className="font-medium text-white">Frontend architecture</span>
+                  <span>Collaborative editor</span>
+                  <span className="font-medium text-white">Realtime sync & run</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Duration</span>
-                  <span className="font-medium text-white">60 minutes</span>
+                  <span>Personalized growth</span>
+                  <span className="font-medium text-white">Tailored learning plan</span>
                 </div>
               </div>
-              {/* Join waiting room removed per request */}
             </div>
           </div>
         </motion.div>

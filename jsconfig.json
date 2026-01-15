@@ -3,6 +3,26 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
-    }
-  }
+    },
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true
+  },
+  "include": [
+    "**/*.js",
+    "**/*.jsx",
+    "**/*.json"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "out",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.d.ts",
+    "app/session-join/SessionJoinClient.js",
+    "app/session/SessionClient.js",
+    "SessionJoinClient.js",
+    "SessionClient.js"
+  ]
 }

@@ -46,7 +46,7 @@ shared code editing within a controlled session-based environment.
 ## Tasks Performed by Members
 - Harshit Kumar - Frontend
 - Vijaya Lakshmi - WebRtc for Video Call, Messaging System, and Authentication
-- Ashish Biswas - Session Management and Collaborative Code Editor
+- Ashish Biswas - Session Management, Collaborative Code Editor and basic user functionality
 
 ---
 
