@@ -109,6 +109,8 @@ function SessionPageContent() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteMutedRef = useRef(true);
+  const activeStreamRef = useRef(null); // Track actual hardware stream for reliable cleanup
+  const isInitializingRef = useRef(false); // Lock to prevent race conditions
 
   const codeRef = useRef(INITIAL_CODE);
   const emitTimeout = useRef(null);
@@ -126,7 +128,7 @@ function SessionPageContent() {
   const [micEnabled, setMicEnabled] = useState(true);
 
   const [isConnecting, setIsConnecting] = useState(false);
-  const [remoteMuted, setRemoteMuted] = useState(true);
+  const [remoteMuted, setRemoteMuted] = useState(false);
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
 
@@ -214,7 +216,7 @@ function SessionPageContent() {
         localStorage.setItem(storageKey, codeContent);
       }
     } catch (e) {
-      console.warn('Failed to save code to localStorage', e);
+      // Failed to save code to localStorage
     }
   };
 
@@ -226,28 +228,63 @@ function SessionPageContent() {
         return localStorage.getItem(storageKey);
       }
     } catch (e) {
-      console.warn('Failed to load code from localStorage', e);
+      // Failed to load code from localStorage
     }
     return null;
   };
 
+  // Helper: Create a black video stream for when camera is off
+  const createBlackVideoStream = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    const stream = canvas.captureStream(30); // 30 FPS black stream
+    return stream;
+  };
+
   // WebRTC Helper Functions
   const initializeMedia = async () => {
+    // Prevent duplicate calls - check if we already have an active stream
+    if (activeStreamRef.current) {
+      return activeStreamRef.current;
+    }
+
+    // Lock to prevent race conditions from simultaneous calls
+    if (isInitializingRef.current) {
+      // Wait for the in-progress initialization to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return activeStreamRef.current || initializeMedia();
+    }
+
+    isInitializingRef.current = true;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: { echoCancellation: true, noiseSuppression: true }
       });
       stream.getTracks().forEach(track => {
+        track.enabled = true;
       });
       
+      // Store in ref for reliable access
+      activeStreamRef.current = stream;
       setLocalStream(stream);
       
-      // Attach to local video element
+      // Attach to local video element immediately
       if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
+        const video = localVideoRef.current;
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play().catch(e => console.log('Local video autoplay failed:', e));
+        };
       }
       
+      isInitializingRef.current = false;
       return stream;
     } catch (error) {
       console.error('Error accessing media devices:', error);
@@ -257,14 +294,17 @@ function SessionPageContent() {
           video: false,
           audio: true
         });
+        activeStreamRef.current = audioStream;
         setLocalStream(audioStream);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = audioStream;
         }
         setCameraEnabled(false);
+        isInitializingRef.current = false;
         return audioStream;
       } catch (audioError) {
         console.error('Error accessing audio:', audioError);
+        isInitializingRef.current = false;
         return null;
       }
     }
@@ -311,41 +351,9 @@ function SessionPageContent() {
       if (event.streams && event.streams[0]) {
         const tracks = event.streams[0].getTracks();
         setRemoteStream(event.streams[0]);
-        
-        if (remoteVideoRef.current) {
-          try {
-            remoteVideoRef.current.muted = !!remoteMutedRef.current;
-            remoteVideoRef.current.srcObject = event.streams[0];
-            
-            const playResult = remoteVideoRef.current.play();
-            if (playResult && typeof playResult.then === 'function') {
-              playResult
-                .then(() => {})
-                .catch(err => console.error('❌ Remote video play failed:', err.message));
-            }
-          } catch (e) { 
-            console.error('❌ Error attaching remote stream:', e.message); 
-          }
-        }
       } else if (event.track) {
         const s = new MediaStream([event.track]);
-        
         setRemoteStream(s);
-        
-        if (remoteVideoRef.current) {
-          try {
-            remoteVideoRef.current.muted = !!remoteMutedRef.current;
-            remoteVideoRef.current.srcObject = s;
-            const playResult = remoteVideoRef.current.play();
-            if (playResult && typeof playResult.then === 'function') {
-              playResult
-                .then(() => {})
-                .catch(err => console.error('❌ Remote video play failed:', err.message));
-            }
-          } catch (e) { 
-            console.error('❌ Error attaching single track:', e.message); 
-          }
-        }
       }
     };
 
@@ -354,7 +362,6 @@ function SessionPageContent() {
         setIsConnecting(false);
         isNegotiatingRef.current = false;
       } else if (pc.connectionState === 'failed') {
-        console.error('❌ Peer connection failed');
         setIsConnecting(false);
         isNegotiatingRef.current = false;
       } else if (pc.connectionState === 'disconnected') {
@@ -371,7 +378,11 @@ function SessionPageContent() {
     try {
       setIsConnecting(true);
       
-      const stream = localStream || await initializeMedia();
+      // Use activeStreamRef for most reliable current stream
+      let stream = activeStreamRef.current || localStream;
+      if (!stream) {
+        stream = await initializeMedia();
+      }
       if (!stream) {
         setIsConnecting(false);
         return;
@@ -389,7 +400,7 @@ function SessionPageContent() {
           
           pc.addTrack(track, stream);
         } catch (e) {
-          console.error(`❌ Failed to add ${track.kind} track:`, e.message);
+          // Failed to add track
         }
       });
 
@@ -406,7 +417,7 @@ function SessionPageContent() {
         } else if (socketRef.current) {
           socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
         }
-      } catch (e) { console.error('❌ Failed to send offer:', e.message); }
+      } catch (e) { /* Failed to send offer */ }
     } catch (error) {
       console.error('Error starting call:', error);
       setIsConnecting(false);
@@ -426,7 +437,11 @@ function SessionPageContent() {
       
       setIsConnecting(true);
       
-      const stream = localStream || await initializeMedia();
+      // Use activeStreamRef for most reliable current stream
+      let stream = activeStreamRef.current || localStream;
+      if (!stream) {
+        stream = await initializeMedia();
+      }
       if (!stream) {
         setIsConnecting(false);
         return;
@@ -446,7 +461,7 @@ function SessionPageContent() {
           
           pc.addTrack(track, stream);
         } catch (e) {
-          console.error(`❌ Failed to add ${track.kind} track:`, e.message);
+          // Failed to add track
         }
       });
 
@@ -461,7 +476,7 @@ function SessionPageContent() {
         } else if (socketRef.current) {
           socketRef.current.emit('webrtc-answer', { link, answer: pc.localDescription });
         }
-      } catch (e) { console.error('❌ Failed to send answer:', e.message); }
+      } catch (e) { /* Failed to send answer */ }
 
       // Process queued ICE candidates
       while (iceCandidatesQueue.current.length > 0) {
@@ -469,7 +484,7 @@ function SessionPageContent() {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
-          console.error('Error adding queued ICE candidate:', e);
+          // Error adding queued ICE candidate
         }
       }
     } catch (error) {
@@ -506,7 +521,7 @@ function SessionPageContent() {
           const t = r && r.track;
         });
       } catch (e) {
-        console.warn('Could not inspect receivers:', e && e.message);
+        // Could not inspect receivers
       }
 
       // Process queued ICE candidates
@@ -515,7 +530,7 @@ function SessionPageContent() {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
-          console.error('Error adding queued ICE candidate:', e);
+          // Error adding queued ICE candidate
         }
       }
       
@@ -551,104 +566,110 @@ function SessionPageContent() {
     const pc = peerConnectionRef.current;
 
     if (cameraEnabled) {
-      // Turn camera OFF - disable video track but keep it in the stream
-      try {
-        if (localStream) {
-          const videoTrack = localStream.getVideoTracks()[0];
-          if (videoTrack) {
-            try { videoTrack.enabled = false; } catch (e) {}
-            setCameraEnabled(false);
+      // Turn camera OFF - Stop ALL tracks from BOTH state AND ref to handle async race conditions
+      
+      // 1. Collect ALL video tracks from both sources (handles state/ref sync issues)
+      const allVideoTracks = [
+        ...(localStream ? localStream.getVideoTracks() : []),
+        ...(activeStreamRef.current ? activeStreamRef.current.getVideoTracks() : [])
+      ];
+      
+      // Remove duplicates by track ID
+      const uniqueTracks = Array.from(
+        new Map(allVideoTracks.map(track => [track.id, track])).values()
+      );
+      
+      // 2. Stop ALL tracks immediately (Hardware Level Release)
+      uniqueTracks.forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
 
-            if (pc) {
-              try {
-                const senders = pc.getSenders ? pc.getSenders() : [];
-                for (const sender of senders) {
-                  if (sender && sender.track && sender.track.kind === 'video') {
-                    try { sender.track.enabled = false; } catch (e) {}
-                  }
-                }
-              } catch (e) {}
-            }
-          }
-        }
-      } catch (err) {
-        console.error('❌ Error turning camera off:', err.message);
+      // 3. Clear ALL video DOM element references (DOM Level Release)
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
       }
-    } else {
-      // Turn camera ON - enable existing track or acquire new one
-      try {
-        // First, try to re-enable existing video track
-        if (localStream) {
-          const existingVideoTrack = localStream.getVideoTracks()[0];
-          if (existingVideoTrack && existingVideoTrack.readyState === 'live') {
-            try { existingVideoTrack.enabled = true; } catch (e) {}
-            setCameraEnabled(true);
 
-            // Re-enable in peer connection
-            if (pc) {
-              const senders = pc.getSenders ? pc.getSenders() : [];
-              for (const sender of senders) {
-                if (sender && sender.track && sender.track.kind === 'video') {
-                  try { sender.track.enabled = true; } catch (e) {}
-                }
-              }
-            }
-            return;
-          }
+      // 4. Create black stream for both local UI and remote peer
+      const currentStream = activeStreamRef.current || localStream;
+      const audioTracks = currentStream ? currentStream.getAudioTracks() : [];
+      const blackStream = createBlackVideoStream();
+      const blackVideoTrack = blackStream.getVideoTracks()[0];
+      const newStream = new MediaStream([...audioTracks, blackVideoTrack]);
+
+      // 5. Send black video to remote peer so they see black screen
+      if (pc && blackVideoTrack) {
+        const senders = pc.getSenders();
+        const vSender = senders.find(s => s.track?.kind === 'video');
+        if (vSender) {
+          await vSender.replaceTrack(blackVideoTrack);
         }
+      }
 
-        // If no existing track or track is stopped, acquire new camera
-        const videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      // 6. Update both ref and state with new stream (keeps audio active)
+      activeStreamRef.current = newStream;
+      setLocalStream(newStream);
+      setCameraEnabled(false);
+    } else {
+      // Turn camera ON - acquire new video track and replace in peer connection
+      try {
+        // Acquire fresh camera stream with quality constraints
+        const videoStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } }, 
+          audio: false 
+        });
         const newVideoTrack = videoStream.getVideoTracks()[0];
 
         if (!newVideoTrack) {
-          throw new Error('No video track obtained');
+          throw new Error('No video track obtained from camera');
         }
 
-        // Ensure we have a localStream object
-        let currentStream = localStream;
-        if (!currentStream) {
-          currentStream = new MediaStream();
-          setLocalStream(currentStream);
-        }
+        // Enable the track immediately
+        newVideoTrack.enabled = true;
 
-        // Remove old video tracks and add new one
-        try {
-          currentStream.getVideoTracks().forEach(track => {
-            try { currentStream.removeTrack(track); } catch (e) {}
-            try { track.stop(); } catch (e) {}
+        // Create NEW stream (don't mutate existing) to ensure clean state
+        const currentStream = activeStreamRef.current || localStream;
+        if (currentStream) {
+          // Stop and remove old black video track
+          const oldVideoTracks = currentStream.getVideoTracks();
+          oldVideoTracks.forEach(track => {
+            track.stop();
           });
-        } catch (e) {}
-        currentStream.addTrack(newVideoTrack);
-        setLocalStream(currentStream);
-
-        // Update video element
-        if (localVideoRef.current) {
-          try { localVideoRef.current.srcObject = currentStream; } catch (e) { console.warn(e); }
+          
+          // Create completely NEW stream with audio + real video
+          const audioTracks = currentStream.getAudioTracks();
+          const newStream = new MediaStream([...audioTracks, newVideoTrack]);
+          
+          // Update BOTH ref and state - CRITICAL!
+          activeStreamRef.current = newStream;
+          setLocalStream(newStream);
+        } else {
+          // No existing stream, create new one with just video
+          const newStream = new MediaStream([newVideoTrack]);
+          activeStreamRef.current = newStream;
+          setLocalStream(newStream);
         }
 
-        // Attach to peer connection
+        // Replace track in peer connection (no renegotiation needed with replaceTrack)
         if (pc) {
           const senders = pc.getSenders ? pc.getSenders() : [];
-          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-
-          let renegotiationNeeded = false;
+          // Find video sender by checking track kind or by checking the transceiver media type
+          const videoSender = senders.find(s => {
+            if (s.track && s.track.kind === 'video') return true;
+            // Check transceiver to see if this sender is for video (even if track is null)
+            const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+            const transceiver = transceivers.find(t => t.sender === s);
+            return transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === 'video';
+          });
 
           if (videoSender && typeof videoSender.replaceTrack === 'function') {
-            try {
-              await videoSender.replaceTrack(newVideoTrack);
-            } catch (e) {
-              try { pc.addTrack(newVideoTrack, currentStream); } catch (err) {}
-              renegotiationNeeded = true;
-            }
+            // replaceTrack doesn't require renegotiation
+            await videoSender.replaceTrack(newVideoTrack);
           } else {
-            try { pc.addTrack(newVideoTrack, currentStream); } catch (err) {}
-            renegotiationNeeded = true;
-          }
-
-          // Renegotiate if we added a new track
-          if (renegotiationNeeded && !isNegotiatingRef.current) {
-            try {
+            // Fallback: add track if no sender exists (requires renegotiation)
+            pc.addTrack(newVideoTrack, localStream);
+            
+            if (!isNegotiatingRef.current) {
               isNegotiatingRef.current = true;
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
@@ -658,9 +679,6 @@ function SessionPageContent() {
               } else if (socketRef.current) {
                 socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
               }
-            } catch (e) {
-            } finally {
-              isNegotiatingRef.current = false;
             }
           }
         }
@@ -678,93 +696,85 @@ function SessionPageContent() {
     const pc = peerConnectionRef.current;
     
     if (micEnabled) {
-      // Turn mic OFF - just disable the audio track
+      // Turn mic OFF - stop audio track and replace with null in peer connection
       try {
-        if (localStream) {
-          const audioTrack = localStream.getAudioTracks()[0];
-          if (audioTrack) {
-            try { audioTrack.enabled = false; } catch (e) {}
+        const currentStream = activeStreamRef.current || localStream;
+        if (currentStream) {
+          // Stop ALL audio tracks to fully release microphone hardware
+          const audioTracks = currentStream.getAudioTracks();
+          audioTracks.forEach(track => {
+            track.stop(); // This releases the hardware
+            track.enabled = false;
+          });
+            
+            // Replace with null in peer connection to stop sending audio
+            if (pc) {
+              const senders = pc.getSenders ? pc.getSenders() : [];
+              const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+              if (audioSender && typeof audioSender.replaceTrack === 'function') {
+                await audioSender.replaceTrack(null);
+              }
+            }
+            
+            // Create new stream without audio for consistency
+            const videoTracks = currentStream.getVideoTracks();
+            const newStream = new MediaStream([...videoTracks]);
+            activeStreamRef.current = newStream;
+            setLocalStream(newStream);
             setMicEnabled(false);
-          }
         }
       } catch (e) {
-        console.error('❌ Error muting mic:', e.message);
+        console.error('Error muting mic:', e);
       }
     } else {
-      // Turn mic ON - enable existing track or acquire new one
+      // Turn mic ON - acquire new audio track and replace in peer connection
       try {
-        // Try to re-enable existing audio track
-        if (localStream) {
-          const existingAudioTrack = localStream.getAudioTracks()[0];
-          if (existingAudioTrack && existingAudioTrack.readyState === 'live') {
-            try { existingAudioTrack.enabled = true; } catch (e) {}
-            setMicEnabled(true);
-            return;
-          }
-        }
-
-        // If no existing track, acquire new microphone
+        // Acquire fresh microphone stream
         const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         const newAudioTrack = audioStream.getAudioTracks()[0];
 
         if (!newAudioTrack) {
-          throw new Error('No audio track obtained');
+          throw new Error('No audio track obtained from microphone');
         }
 
-        // Ensure we have a MediaStream
-        let currentStream = localStream;
-        if (!currentStream) {
-          currentStream = new MediaStream();
-          setLocalStream(currentStream);
-        }
+        // Create new stream with audio + existing video tracks
+        const currentStream = activeStreamRef.current || localStream;
+        const videoTracks = currentStream ? currentStream.getVideoTracks() : [];
+        const newStream = new MediaStream([...videoTracks, newAudioTrack]);
+        
+        // Update both ref and state
+        activeStreamRef.current = newStream;
+        setLocalStream(newStream);
 
-        // Remove old audio tracks and add new one
-        try {
-          currentStream.getAudioTracks().forEach(track => {
-            try { currentStream.removeTrack(track); } catch (e) {}
-            try { track.stop(); } catch (e) {}
-          });
-        } catch (e) {}
-        currentStream.addTrack(newAudioTrack);
-        setLocalStream(currentStream);
-
-        // Attach to peer connection
+        // Replace track in peer connection (no renegotiation needed with replaceTrack)
         if (pc) {
           const senders = pc.getSenders ? pc.getSenders() : [];
-          const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-
-          let renegotiationNeeded = false;
+          // Find audio sender by checking track kind or by checking the transceiver media type
+          const audioSender = senders.find(s => {
+            if (s.track && s.track.kind === 'audio') return true;
+            // Check transceiver to see if this sender is for audio (even if track is null)
+            const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+            const transceiver = transceivers.find(t => t.sender === s);
+            return transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === 'audio';
+          });
 
           if (audioSender && typeof audioSender.replaceTrack === 'function') {
-            try {
-              await audioSender.replaceTrack(newAudioTrack);
-            } catch (e) {
-              console.warn('replaceTrack failed for audio, adding new track:', e);
-              try { pc.addTrack(newAudioTrack, currentStream); } catch (err) { console.warn('addTrack failed', err); }
-              renegotiationNeeded = true;
-            }
+            // replaceTrack doesn't require renegotiation
+            await audioSender.replaceTrack(newAudioTrack);
           } else {
-            try { pc.addTrack(newAudioTrack, currentStream); } catch (err) { console.warn('addTrack failed', err); }
-            renegotiationNeeded = true;
-          }
+            // Fallback: add track if no sender exists (requires renegotiation)
+            pc.addTrack(newAudioTrack, localStream || new MediaStream([newAudioTrack]));
 
-          // Renegotiate if needed
-          if (renegotiationNeeded && !isNegotiatingRef.current) {
-            try {
+            if (!isNegotiatingRef.current) {
               isNegotiatingRef.current = true;
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-
               const room = (session && (session.link || session.id)) || link;
               if (signalSocketRef.current && signalSocketRef.current.connected) {
                 signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
               } else if (socketRef.current) {
                 socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
               }
-            } catch (e) {
-              console.warn('Failed to renegotiate after adding audio track', e);
-            } finally {
-              isNegotiatingRef.current = false;
             }
           }
         }
@@ -773,15 +783,35 @@ function SessionPageContent() {
 
       } catch (e) {
         console.error('Error enabling mic:', e);
-        alert('Failed to access microphone: ' + (e && e.message));
+        alert('Failed to access microphone. Please check permissions.');
       }
     }
   };
 
   const cleanupWebRTC = () => {
-    // Stop all tracks
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+    // Stop ALL tracks from BOTH state AND ref to handle any zombie streams
+    const allTracks = [
+      ...(localStream ? localStream.getTracks() : []),
+      ...(activeStreamRef.current ? activeStreamRef.current.getTracks() : [])
+    ];
+    
+    // Remove duplicates by track ID
+    const uniqueTracks = Array.from(
+      new Map(allTracks.map(track => [track.id, track])).values()
+    );
+    
+    // Stop all unique tracks
+    uniqueTracks.forEach(track => {
+      track.stop(); // Stop hardware
+      track.enabled = false;
+    });
+    
+    // Clear ALL video element references
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
     }
     
     // Close peer connection
@@ -790,6 +820,8 @@ function SessionPageContent() {
       peerConnectionRef.current = null;
     }
     
+    // Clear all stream references
+    activeStreamRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
   };
@@ -918,7 +950,7 @@ function SessionPageContent() {
       const signal = io(BASE + '/signal');
       signalSocketRef.current = signal;
     } catch (e) {
-      console.warn('Failed to connect to signaling namespace', e);
+      // Failed to connect to signaling namespace
     }
 
     socket.on('connect', () => {
@@ -1201,8 +1233,8 @@ function SessionPageContent() {
       s.on('answer', handleWebRTCAnswer);
       s.on('ice-candidate', handleICECandidate);
       
-      // When another participant joins, mentor should initiate the call
-      s.on('participant-ready', (payload) => {
+      // When another participant joins, mentor should initiate the call immediately
+      s.on('participant-ready', async (payload) => {
         
         try {
           const localIsMentor = isMentorRef.current;
@@ -1210,10 +1242,14 @@ function SessionPageContent() {
           const isNeg = isNegotiatingRef.current;
 
           if (localIsMentor && !pc && !isNeg) {
-            setTimeout(() => startCall(), 500);
+            // Ensure media is ready before starting call - use activeStreamRef for consistency
+            if (!activeStreamRef.current) {
+              await initializeMedia();
+            }
+            startCall();
           }
         } catch (e) {
-          console.error('❌ Error in participant-ready:', e.message);
+          // Error in participant-ready
         }
       });
     }
@@ -1301,16 +1337,28 @@ function SessionPageContent() {
     };
   }, [link]);
 
-  // Initialize WebRTC when session is loaded
+  // Initialize WebRTC media eagerly when session is loaded
   useEffect(() => {
-    if (session && link && !localStream) {
-      initializeMedia();
+    // Only initialize if we don't have an active stream
+    if (session && link && !activeStreamRef.current) {
+      // Initialize media immediately to avoid delays when call starts
+      initializeMedia().catch(err => {
+        console.error('Failed to initialize media:', err);
+      });
     }
 
     return () => {
-      // Cleanup on unmount
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+      // Cleanup on unmount - use activeStreamRef for reliable cleanup
+      const currentStream = activeStreamRef.current;
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => {
+          track.enabled = false;
+          track.stop();
+        });
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
+        activeStreamRef.current = null;
       }
     };
   }, [session, link]);
@@ -1318,72 +1366,55 @@ function SessionPageContent() {
   // Update video elements when streams change
   useEffect(() => {
     if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+      const video = localVideoRef.current;
+      video.srcObject = localStream;
+      // Use onloadedmetadata to avoid AbortError
+      video.onloadedmetadata = () => {
+        video.play().catch(e => console.log('Local video play failed:', e));
+      };
     }
   }, [localStream]);
 
+  // Combined useEffect for remoteStream to prevent flickering and AbortError
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
+    if (remoteVideoRef.current) {
+      const video = remoteVideoRef.current;
       
-      // Diagnostic: check track states
-      const tracks = remoteStream.getTracks();
-      
-      try {
-        // Ensure muted state is applied before attempting autoplay to satisfy browser policies
-        // Temporarily force unmuted to test if muting is causing issues
-        remoteVideoRef.current.muted = false;
-        remoteVideoRef.current.srcObject = remoteStream;
+      if (remoteStream) {
+        // Diagnostic: check track states
+        const tracks = remoteStream.getTracks();
         
-        
-        const attemptPlay = () => {
-          const playResult = remoteVideoRef.current.play();
-          if (playResult && typeof playResult.then === 'function') {
-            playResult
-              .then(() => {})
-              .catch(err => {
-                console.error('❌ Remote video play failed (from useEffect):', err.message);
-                // Retry after a short delay if autoplay was blocked
-                if (err.name === 'NotAllowedError') {
-                  
-                }
-              });
-          } else {
-            
+        // Add event listeners to tracks for when they end (camera/mic turned off)
+        tracks.forEach(track => {
+          if (track.kind === 'video') {
+            track.onended = () => {
+              // When remote video track ends, show black screen instead of frozen frame
+              if (remoteVideoRef.current) {
+                const blackStream = createBlackVideoStream();
+                remoteVideoRef.current.srcObject = blackStream;
+                remoteVideoRef.current.play().catch(err => console.error('Error playing black stream:', err));
+              }
+            };
           }
-        };
+        });
         
-        // If readyState is low, wait for loadedmetadata with timeout
-        if (remoteVideoRef.current.readyState < 2) {
+        try {
+          // Apply muted state and set stream
+          video.muted = remoteMuted;
+          video.srcObject = remoteStream;
           
-          let handled = false;
-          
-          const metadataHandler = () => {
-            if (handled) return;
-            handled = true;
-            attemptPlay();
-          };
-          
-          remoteVideoRef.current.addEventListener('loadedmetadata', metadataHandler, { once: true });
-          
-          // Fallback: if metadata doesn't load in 2 seconds, try play anyway
-          setTimeout(() => {
-            if (!handled) {
-              handled = true;
-              remoteVideoRef.current.removeEventListener('loadedmetadata', metadataHandler);
-              attemptPlay();
-            }
-          }, 2000);
-          
-          // Force load
-          try {
-            remoteVideoRef.current.load();
-          } catch (e) {
-          }
-        } else {
-          attemptPlay();
+          // Play immediately without waiting for metadata
+          video.play().catch(err => {
+            console.error('❌ Remote video play failed:', err.message);
+          });
+        } catch (e) {
+          console.error('❌ Error in remoteStream useEffect:', e.message);
         }
-      } catch (e) {
-        console.error('❌ Error in remoteStream useEffect:', e.message);
+      } else {
+        // No remote stream - show black canvas instead of frozen frame
+        const blackStream = createBlackVideoStream();
+        video.srcObject = blackStream;
+        video.play().catch(err => console.error('Error playing black stream:', err));
       }
     }
   }, [remoteStream, remoteMuted]);
@@ -1458,14 +1489,17 @@ function SessionPageContent() {
     // Save code to localStorage for persistence across sessions
     saveCodeToStorage(link, v);
 
-    // debounce emits to avoid flooding
+    // Emit code changes immediately for real-time collaboration
+    try {
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('code-change', { link, code: v });
+      }
+    } catch (e) {}
+
+    // Debounce database saves to avoid excessive requests
     try {
       if (emitTimeout.current) clearTimeout(emitTimeout.current);
       emitTimeout.current = setTimeout(() => {
-        if (socketRef.current && socketRef.current.connected) {
-          socketRef.current.emit('code-change', { link, code: v });
-        }
-        
         // Auto-save to database (debounced to avoid excessive saves)
         if (session && session.id) {
           fetch(`${BASE}/editor/saveCode`, {
@@ -1477,7 +1511,7 @@ function SessionPageContent() {
           });
         }
         emitTimeout.current = null;
-      }, 2000); // 2 second debounce for auto-save
+      }, 2000); // 2 second debounce for database auto-save only
     } catch (e) {}
   };
 
@@ -1747,6 +1781,7 @@ function SessionPageContent() {
     }
   };
 
+  // Loading check - show loading state while auth is initializing
   if (loading || (!user && !guest)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
@@ -2028,24 +2063,6 @@ function SessionPageContent() {
                         {isConnecting ? 'Connecting...' : 'Waiting for remote video'}
                       </div>
                     )}
-                    {/* Unmute toggle: allow user to enable remote audio after autoplay */}
-                    {remoteStream && (
-                      <div className="absolute top-2 right-2">
-                        <button
-                          onClick={() => {
-                            try {
-                              const next = !remoteMuted;
-                              setRemoteMuted(next);
-                              if (remoteVideoRef.current) remoteVideoRef.current.muted = next;
-                            } catch (e) {}
-                          }}
-                          className="rounded-full bg-black/60 px-2 py-1 text-xs text-slate-200 border border-white/10"
-                          title={remoteMuted ? 'Unmute remote audio' : 'Mute remote audio'}
-                        >
-                          {remoteMuted ? 'Unmute' : 'Mute'}
-                        </button>
-                      </div>
-                    )}
                     
                     {/* Local video (Picture-in-Picture) */}
                     {localStream && (
@@ -2270,27 +2287,6 @@ function SessionPageContent() {
                   <span>Connecting...</span>
                 </div>
               )}
-              {/* Quick debug button logs senders/transceivers and local tracks to console */}
-              <button
-                onClick={async () => {
-                  try {
-                    const pc = peerConnectionRef.current;
-                    const senders = pc && pc.getSenders ? pc.getSenders().map(s => ({ id: s && s.track ? s.track.id : null, kind: s && s.track ? s.track.kind : null, readyState: s && s.track ? s.track.readyState : null })) : [];
-                    const transceivers = pc && pc.getTransceivers ? pc.getTransceivers().map(t => ({ mid: t.mid, direction: t.direction, senderKind: t.sender && t.sender.track ? t.sender.track.kind : null, senderReadyState: t.sender && t.sender.track ? t.sender.track.readyState : null })) : [];
-                    const local = localStream ? { audio: localStream.getAudioTracks().map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })), video: localStream.getVideoTracks().map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) } : { audio: [], video: [] };
-                    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-                    console.group('WebRTC Debug');
-                    console.groupEnd();
-                    alert(`Debug info logged to console. senders=${senders.length}, transceivers=${transceivers.length}, localVideo=${local.video.length}`);
-                  } catch (e) {
-                    alert('Failed to gather debug info: ' + (e && e.message));
-                  }
-                }}
-                className="ml-3 rounded px-3 py-2 text-xs bg-white/5 text-white"
-                title="Log WebRTC debug info to console"
-              >
-                Debug
-              </button>
             </div>
           </div>
         </div>
