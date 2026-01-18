@@ -17,6 +17,7 @@ const navLinks = [
 
 export function Navbar() {
   const pathname = usePathname();
+  const hideNavLinks = pathname === '/dashboard' || (pathname || '').startsWith('/dashboard');
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -56,7 +57,7 @@ export function Navbar() {
           Mentor Bridge
         </Link>
         <div className="hidden items-center gap-8 text-sm text-slate-200 md:flex">
-          {navLinks.map((item) => (
+          {!hideNavLinks && navLinks.map((item) => (
             <a
               key={item.href}
               href={item.href}
@@ -114,7 +115,7 @@ export function Navbar() {
           >
             <Dialog.Panel className="fixed inset-x-4 top-20 origin-top rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
               <nav className="space-y-4 text-base text-slate-100">
-                {navLinks.map((item) => (
+                {!hideNavLinks && navLinks.map((item) => (
                   <a
                     key={item.href}
                     href={item.href}

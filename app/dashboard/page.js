@@ -11,6 +11,7 @@ import {
   CheckCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
+import { Navbar } from '@/components/Navbar';
 
 const BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
@@ -232,10 +233,11 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-10 text-slate-100">
+      <Navbar />
       <div className="mx-auto flex max-w-6xl flex-col gap-10">
         <header className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-white/50">Mentor Dashboard</p>
+            <p className="text-sm uppercase tracking-[0.3em] text-white/50 font-fancy">Mentor Dashboard</p>
             <h1 className="mt-3 font-display text-4xl text-white">Welcome back, {user.name.split(' ')[0]}.</h1>
             <p className="mt-2 max-w-xl text-sm text-slate-300">
               Manage your mentorship sessions, track progress with your mentees, and guide them towards their coding goals.
@@ -243,19 +245,19 @@ export default function DashboardPage() {
           </div>
           <div className="flex items-center gap-3">
             <button
+              onClick={() => router.push('/')}
+              className="group flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary/40 hover:bg-primary/20"
+            >
+              Back
+            </button>
+            <button
               onClick={startSession}
               className="group flex items-center gap-2 self-start rounded-full border border-primary/40 bg-primary/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:bg-primary/30"
             >
               <CodeBracketIcon className="h-5 w-5 text-primary transition group-hover:scale-110" />
               New Session
             </button>
-            <button
-              onClick={handleLogout}
-              className="group flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:border-primary/40 hover:bg-primary/20"
-            >
-              <ArrowLeftOnRectangleIcon className="h-5 w-5 text-primary transition group-hover:translate-x-0.5" />
-              Log out
-            </button>
+            {/* Logout moved to global Navbar */}
           </div>
         </header>
 
