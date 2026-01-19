@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo, Suspense } from 'react';
+import { useEffect, useState, useRef, useMemo, Suspense, memo } from 'react';
+import ReactDOM from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -96,9 +97,11 @@ function SessionPageContent() {
   const localParticipantNameRef = useRef(null);
   const userRef = useRef(null);
   const sessionRef = useRef(null);
+  const sessionJsonRef = useRef(null);
   const chatStudentNameRef = useRef(null);
   const chatInputRef = useRef(null);
   const participantsRef = useRef([]);
+  const participantsJsonRef = useRef(null);
   const isMentorRef = useRef(false);
   const iceCandidatesQueue = useRef([]);
   const presenceRef = useRef({});
@@ -114,6 +117,7 @@ function SessionPageContent() {
 
   const codeRef = useRef(INITIAL_CODE);
   const emitTimeout = useRef(null);
+  const typingEmitRef = useRef(0);
 
   const [guest, setGuest] = useState(null);
   const [session, setSession] = useState(null);
@@ -131,11 +135,176 @@ function SessionPageContent() {
   const [remoteMuted, setRemoteMuted] = useState(false);
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
+  const [chatVisible, setChatVisible] = useState(false);
 
   // Keep refs in sync with latest state so external socket handlers can read current values
   useEffect(() => { userRef.current = user; }, [user]);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { participantsRef.current = participants; }, [participants]);
+  // Autofocus chat input when the floating chat panel is opened
+  useEffect(() => {
+    if (chatVisible) {
+      try { setTimeout(() => { chatInputRef.current?.focus(); }, 50); } catch (e) {}
+    }
+  }, [chatVisible]);
+  
+  // Chat portal component: renders chat UI into document.body to avoid stacking-context issues
+  const ChatPortal = useMemo(() => memo((props) => {
+    const { chatVisible, setChatVisible, messages, chatInput, setChatInput, chatInputRef, session, link, chatStudentNameRef, user, guest, socketRef, setMessages } = props;
+    const [el, setEl] = useState(null);
+    const createdRef = useRef(false);
+
+    useEffect(() => {
+      try {
+        // Reuse existing container if present to avoid DOM churn when parent re-mounts
+        let container = document.getElementById('floating-chat-root');
+        if (!container) {
+          container = document.createElement('div');
+          container.setAttribute('id', 'floating-chat-root');
+          document.body.appendChild(container);
+          createdRef.current = true;
+        }
+        setEl(container);
+        return () => {
+          try {
+            if (createdRef.current && container && container.parentNode) {
+              container.parentNode.removeChild(container);
+            }
+          } catch (e) {}
+        };
+      } catch (e) {
+        return undefined;
+      }
+    }, []);
+
+    // Restore focus/selection on the chat input if messages update and the input lost focus.
+    useEffect(() => {
+      if (!chatVisible) return;
+      try {
+        const elInput = chatInputRef?.current;
+        if (!elInput) return;
+        if (document.activeElement !== elInput) {
+          const start = elInput.selectionStart ?? 0;
+          const end = elInput.selectionEnd ?? start;
+          elInput.focus();
+          try { elInput.setSelectionRange(start, end); } catch (e) {}
+        }
+      } catch (e) {}
+    }, [messages, chatVisible]);
+
+    const chatBox = useMemo(() => (
+      <div>
+        {!chatVisible ? (
+          <button
+            type="button"
+            onClick={() => setChatVisible(true)}
+            aria-label="Open chat"
+            className="fixed bottom-6 right-6 pointer-events-auto flex items-center gap-2 bg-primary px-4 py-3 rounded-full shadow-lg text-white"
+            style={{ zIndex: 9999 }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v7a2 2 0 01-2 2H7l-5 3V5z" />
+            </svg>
+            <span className="sr-only">Open chat</span>
+          </button>
+        ) : (
+          <div className="fixed right-6 pointer-events-auto w-80 border border-white/10 bg-slate-950/60 p-4 flex flex-col rounded-lg shadow-xl" style={{ zIndex: 9999, top: '7.5rem', bottom: '3.5rem' }}>
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Chat</h3>
+                <p className="text-xs text-slate-400">Session chat</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setChatVisible(false)}
+                className="text-slate-300 hover:text-white ml-2"
+                aria-label="Close chat"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto rounded-lg border border-white/6 bg-slate-900/40 p-3">
+              <div className="flex flex-col gap-3">
+                {messages.length === 0 ? (
+                  <div className="text-xs text-slate-400">No messages yet</div>
+                ) : (
+                  messages.map((m) => (
+                    <div key={m.id} className="text-sm">
+                      <div className="text-xs text-slate-400">{m.user}</div>
+                      <div className="mt-1 rounded-md bg-slate-800/60 px-3 py-2 text-slate-100">{m.content}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <div className="flex items-center gap-2" onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}>
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  value={chatInput}
+                  ref={chatInputRef}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const text = chatInput && chatInput.trim();
+                      if (!text) return;
+                      const sessionId = session?.id || link;
+                      const canonicalRoom = session?.link || session?.id || link;
+                      const studentName = chatStudentNameRef.current || session?.student_name || link;
+                      const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+                      const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
+                      try {
+                        setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
+                        if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
+                      } catch (e) {}
+                      setChatInput('');
+                    }
+                  }}
+                  onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
+                  onFocus={(e) => { try { e.stopPropagation(); } catch (e) {} }}
+                  autoFocus={false}
+                  tabIndex={0}
+                  style={{ zIndex: 70, position: 'relative', pointerEvents: 'auto' }}
+                  className="flex-1 rounded-lg bg-slate-900/60 border border-white/10 px-3 py-2 text-sm text-slate-100"
+                />
+                {/* focus-restorer runs in hook above; nothing to render here */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const text = chatInput && chatInput.trim();
+                    if (!text) return;
+                    const sessionId = session?.id || link;
+                    const canonicalRoom = session?.link || session?.id || link;
+                    const studentName = chatStudentNameRef.current || session?.student_name || link;
+                    const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+                    const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
+                    try {
+                      setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
+                      if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
+                    } catch (e) {}
+                    setChatInput('');
+                  }}
+                  className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white"
+                  style={{ pointerEvents: 'auto', zIndex: 70 }}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    ), [chatVisible, messages, chatInput, setChatVisible, setChatInput, chatInputRef, session, link, chatStudentNameRef, user, guest, socketRef, setMessages]);
+
+    if (!el) return null;
+
+    return ReactDOM.createPortal(chatBox, el);
+  }), []);
+  // Invoke ChatPortal once at top level to ensure the component is stable
   // Note: isMentorRef is synced after `isMentor` is declared to avoid temporal dead zone
   const [isRunning, setIsRunning] = useState(false);
   const [output, setOutput] = useState('');
@@ -959,7 +1128,15 @@ function SessionPageContent() {
 
     socket.on('session-joined', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
-      setSession(sessionData || null);
+      try {
+        const serialized = JSON.stringify(sessionData || {});
+        if (sessionJsonRef.current !== serialized) {
+          sessionJsonRef.current = serialized;
+          setSession(sessionData || null);
+        }
+      } catch (e) {
+        setSession(sessionData || null);
+      }
       // Join signaling room for video calls when session data is available
       try {
         const room = (sessionData && (sessionData.link || sessionData.id)) || link;
@@ -1002,7 +1179,12 @@ function SessionPageContent() {
       
       // refresh participants list when session data arrives
       try {
-        setParticipants(buildParticipants(sessionData));
+        const built = buildParticipants(sessionData);
+        const pSerialized = JSON.stringify(built || []);
+        if (participantsJsonRef.current !== pSerialized) {
+          participantsJsonRef.current = pSerialized;
+          setParticipants(built);
+        }
       } catch (e) {}
       // update active state/timer
       try {
@@ -1012,11 +1194,20 @@ function SessionPageContent() {
 
     socket.on('session-update', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
-      setSession(sessionData || null);
-      // refresh participants list when session updates
       try {
+        const serialized = JSON.stringify(sessionData || {});
+        if (sessionJsonRef.current !== serialized) {
+          sessionJsonRef.current = serialized;
+          setSession(sessionData || null);
+        }
+
+        // refresh participants list when session updates
         const built = buildParticipants(sessionData);
-        setParticipants(built);
+        const pSerialized = JSON.stringify(built || []);
+        if (participantsJsonRef.current !== pSerialized) {
+          participantsJsonRef.current = pSerialized;
+          setParticipants(built);
+        }
 
         // Apply any explicit presence overrides we've received from sockets
         // If mentor/student left, remove them from the list (don't just mark inactive)
@@ -1066,7 +1257,15 @@ function SessionPageContent() {
           const json = await resp.json().catch(() => null);
           const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
           if (sessionData) {
-            setSession(sessionData);
+            try {
+              const serialized = JSON.stringify(sessionData || {});
+              if (sessionJsonRef.current !== serialized) {
+                sessionJsonRef.current = serialized;
+                setSession(sessionData);
+              }
+            } catch (e) {
+              setSession(sessionData);
+            }
             try { updateSessionState(sessionData); } catch (e) {}
           }
         } catch (e) {
@@ -1095,7 +1294,15 @@ function SessionPageContent() {
           const json = await resp.json().catch(() => null);
           const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
           if (sessionData) {
-            setSession(sessionData);
+            try {
+              const serialized = JSON.stringify(sessionData || {});
+              if (sessionJsonRef.current !== serialized) {
+                sessionJsonRef.current = serialized;
+                setSession(sessionData);
+              }
+            } catch (e) {
+              setSession(sessionData);
+            }
             try { updateSessionState(sessionData); } catch (e) {}
           }
         } catch (e) {
@@ -1104,8 +1311,8 @@ function SessionPageContent() {
       } catch (e) {}
     });
 
-    // listen for remote cursor positions
-    socket.on('cursor-position', (payload) => {
+    // listen for remote cursor positions (support both 'cursor-position' and 'cursor-change' events)
+  socket.on('cursor-position', (payload) => {
       try {
         if (!payload || payload.link !== link) return;
         const sid = payload.senderId;
@@ -1130,6 +1337,43 @@ function SessionPageContent() {
         const className = `remote-caret-${colorIndex}`;
 
         // prepare decoration
+        if (editorRef.current && monacoRef.current) {
+          const monaco = monacoRef.current;
+          const range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
+          const newDecor = [{ range, options: { afterContentClassName: className, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowWhenTypingAtEdges } }];
+
+          const prev = remoteCursorsRef.current[sid]?.decorationIds || [];
+          try {
+            const newIds = editorRef.current.deltaDecorations(prev, newDecor);
+            remoteCursorsRef.current[sid] = { decorationIds: newIds, colorIndex };
+          } catch (e) {
+            // ignore errors from deltaDecorations
+          }
+        }
+      } catch (e) {}
+    });
+
+    // Also accept server-relayed 'cursor-change' events for compatibility with backend
+    socket.on('cursor-change', (payload) => {
+      try {
+        if (!payload || payload.link !== link) return;
+        const sid = payload.senderId;
+        if (!sid) return;
+        if (socketRef.current && socketRef.current.id === sid) return;
+
+        const pos = payload.position;
+        if (!pos || !pos.lineNumber) return;
+
+        const pickIndex = (id) => {
+          const colors = [0,1,2,3,4,5];
+          let h = 0;
+          for (let i = 0; i < id.length; i++) h = (h << 5) - h + id.charCodeAt(i);
+          return Math.abs(h) % colors.length;
+        };
+
+        const colorIndex = remoteCursorsRef.current[sid]?.colorIndex ?? pickIndex(String(sid));
+        const className = `remote-caret-${colorIndex}`;
+
         if (editorRef.current && monacoRef.current) {
           const monaco = monacoRef.current;
           const range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
@@ -1171,6 +1415,12 @@ function SessionPageContent() {
           type: msg.type || 'text',
           created_at: msg.created_at || new Date().toISOString(),
         };
+        // Ignore system messages (join/leave) so they are not shown in chat
+        if (normalized.type === 'system' || String(normalized.user).toLowerCase() === 'system') return;
+        // Also ignore common join/leave content patterns
+        const lc = String(normalized.content || '').toLowerCase();
+        if (lc.includes(' joined the session') || lc.includes(' left the session') || lc.includes('joined the chat') || lc.includes('left the chat')) return;
+
         setMessages((prev) => [...prev, normalized]);
       } catch (e) {}
     });
@@ -1466,9 +1716,15 @@ function SessionPageContent() {
             try { editorRef.current.deltaDecorations(prev, []); } catch (e) {}
           });
         }
-        // dispose selection listener
-        if (selectionListenerRef.current && typeof selectionListenerRef.current.dispose === 'function') {
-          try { selectionListenerRef.current.dispose(); } catch (e) {}
+        // dispose selection listener and any content listener attached to it
+        if (selectionListenerRef.current) {
+          try {
+            if (typeof selectionListenerRef.current.dispose === 'function') selectionListenerRef.current.dispose();
+          } catch (e) {}
+          try {
+            const contentListener = selectionListenerRef.current && selectionListenerRef.current._contentListener;
+            if (contentListener && typeof contentListener.dispose === 'function') contentListener.dispose();
+          } catch (e) {}
         }
       } catch (e) {}
     };
@@ -1526,7 +1782,7 @@ function SessionPageContent() {
 
     // Listen for cursor/selection changes and emit cursor position to peers
     try {
-      if (editor && typeof editor.onDidChangeCursorSelection === 'function') {
+        if (editor && typeof editor.onDidChangeCursorSelection === 'function') {
         selectionListenerRef.current = editor.onDidChangeCursorSelection((e) => {
           try {
             const pos = e.selection.getPosition();
@@ -1538,10 +1794,36 @@ function SessionPageContent() {
               position: { lineNumber: pos.lineNumber, column: pos.column },
             };
             if (socketRef.current && socketRef.current.connected) {
+              // Emit both local and server-compatible event names to ensure delivery
               socketRef.current.emit('cursor-position', payload);
+              socketRef.current.emit('cursor-change', payload);
             }
           } catch (e) {}
         });
+
+        // Also emit position while typing so others see a live typing caret
+        try {
+          const contentListener = editor.onDidChangeModelContent(() => {
+            try {
+              const now = Date.now();
+              if (now - (typingEmitRef.current || 0) < 120) return; // throttle to ~120ms
+              typingEmitRef.current = now;
+              const pos = editor.getPosition();
+              if (!pos) return;
+              const payload = {
+                link,
+                senderId: socketRef.current?.id || null,
+                name: (typeof window !== 'undefined' && window.localStorage.getItem('mentor-bridge-guest')) ? (JSON.parse(window.localStorage.getItem('mentor-bridge-guest') || '{}')?.name) : (null),
+                position: { lineNumber: pos.lineNumber, column: pos.column },
+              };
+              if (socketRef.current && socketRef.current.connected) {
+                socketRef.current.emit('cursor-change', payload);
+              }
+            } catch (e) {}
+          });
+          // store so we can dispose on unmount
+          selectionListenerRef.current._contentListener = contentListener;
+        } catch (e) {}
       }
     } catch (e) {}
   };
@@ -2174,89 +2456,22 @@ function SessionPageContent() {
           </div>
         </main>
 
-        {/* Right-side chat panel */}
-        <aside
-          className="w-80 border-l border-white/10 bg-slate-950/60 p-4 flex flex-col"
-          onClick={() => { try { if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
-        >
-          <div className="mb-3">
-            <h3 className="text-sm font-semibold text-white">Chat</h3>
-            <p className="text-xs text-slate-400">Session chat</p>
-          </div>
-
-          <div className="flex-1 overflow-y-auto rounded-lg border border-white/6 bg-slate-900/40 p-3">
-            {/* messages list */}
-            <div className="flex flex-col gap-3">
-              {messages.length === 0 ? (
-                <div className="text-xs text-slate-400">No messages yet</div>
-              ) : (
-                messages.map((m) => (
-                  <div key={m.id} className="text-sm">
-                    <div className="text-xs text-slate-400">{m.user}</div>
-                    <div className="mt-1 rounded-md bg-slate-800/60 px-3 py-2 text-slate-100">{m.content}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="flex items-center gap-2" onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}>
-              <input
-                type="text"
-                placeholder="Type a message..."
-                value={chatInput}
-                ref={chatInputRef}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    const text = chatInput && chatInput.trim();
-                    if (!text) return;
-                    const sessionId = session?.id || link;
-                    const canonicalRoom = session?.link || session?.id || link;
-                    const studentName = chatStudentNameRef.current || session?.student_name || link;
-                    const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
-                    const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
-                    try {
-                      // optimistic append
-                      setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
-                      if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
-                    } catch (e) {}
-                    setChatInput('');
-                  }
-                }}
-                onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
-                onFocus={(e) => { try { e.stopPropagation(); } catch (e) {} }}
-                autoFocus={false}
-                tabIndex={0}
-                style={{ zIndex: 50, position: 'relative', pointerEvents: 'auto' }}
-                className="flex-1 rounded-lg bg-slate-900/60 border border-white/10 px-3 py-2 text-sm text-slate-100"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const text = chatInput && chatInput.trim();
-                  if (!text) return;
-                  const sessionId = session?.id || link;
-                  const canonicalRoom = session?.link || session?.id || link;
-                  const studentName = chatStudentNameRef.current || session?.student_name || link;
-                  const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
-                  const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
-                  try {
-                    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
-                    if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
-                  } catch (e) {}
-                  setChatInput('');
-                }}
-                className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white"
-                style={{ pointerEvents: 'auto', zIndex: 60 }}
-              >
-                Send
-              </button>
-            </div>
-          </div>
-        </aside>
+        {/* Render chat via portal to avoid stacking/context click-blocking issues */}
+        <ChatPortal
+          chatVisible={chatVisible}
+          setChatVisible={setChatVisible}
+          messages={messages}
+          chatInput={chatInput}
+          setChatInput={setChatInput}
+          chatInputRef={chatInputRef}
+          session={session}
+          link={link}
+          chatStudentNameRef={chatStudentNameRef}
+          user={user}
+          guest={guest}
+          socketRef={socketRef}
+          setMessages={setMessages}
+        />
       </div>
 
       {/* (video placeholder moved into participants sidebar; fixed duplicate removed) */}
