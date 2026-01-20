@@ -32,16 +32,16 @@ export function Hero() {
           variants={container}
           className="flex-1 space-y-6"
         >
-          <motion.span variants={item} className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1 text-xs uppercase tracking-[0.3em] text-white/70">
+          <motion.span variants={item} className="inline-flex items-center gap-2 rounded-full bg-slate-800/50 dark:bg-white/10 px-4 py-1 text-xs uppercase tracking-[0.3em] text-slate-300 dark:text-white/70">
             Your private coding mentor
           </motion.span>
           <motion.h1
             variants={item}
-            className="font-display text-4xl leading-tight text-white md:text-6xl md:leading-[1.1]"
+            className="font-display text-4xl leading-tight text-slate-900 dark:text-white md:text-6xl md:leading-[1.1]"
           >
             Learn to code faster with 1-on-1 mentorship tailored to you.
           </motion.h1>
-          <motion.p variants={item} className="max-w-xl text-lg text-slate-300">
+          <motion.p variants={item} className="max-w-xl text-lg text-slate-600 dark:text-slate-300">
             Mentor Bridge pairs ambitious students with world-class developers for live, guided sessions that accelerate skill growth and confidence.
           </motion.p>
           <motion.div variants={item} className="flex flex-col gap-3 sm:flex-row">
@@ -55,7 +55,7 @@ export function Hero() {
               Explore features
             </Button>
           </motion.div>
-          <motion.ul variants={item} className="flex flex-wrap gap-6 text-xs text-slate-400">
+          <motion.ul variants={item} className="flex flex-wrap gap-6 text-xs text-slate-500 dark:text-slate-400">
             <li className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-accent" />Personalized learning paths
             </li>
@@ -73,33 +73,33 @@ export function Hero() {
           transition={{ delay: 0.3, duration: 0.8, ease: 'easeOut' }}
           className="flex flex-1 justify-center"
         >
-          <div className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl backdrop-blur">
-            <div className="absolute inset-x-8 top-0 h-[2px] animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent" />
+          <div className="relative w-full max-w-md rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 p-6 shadow-2xl backdrop-blur">
+            <div className="absolute inset-x-8 top-0 h-[2px] animate-shimmer bg-gradient-to-r from-transparent via-primary/60 dark:via-white/60 to-transparent" />
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="font-display text-xl text-white">Mentor Bridge</p>
-                  <p className="mt-1 text-xs text-slate-400">Live 1-on-1 coding mentorship</p>
+                  <p className="font-display text-xl text-slate-900 dark:text-white">Mentor Bridge</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Live 1-on-1 coding mentorship</p>
                 </div>
                 <span className="rounded-full bg-accent/20 px-3 py-1 text-xs text-accent">1-on-1</span>
               </div>
 
-              <div className="rounded-2xl bg-slate-950/60 p-4">
-                <p className="text-sm text-slate-200">Mentor Bridge connects you with expert developers for hands-on, live coding sessions. Work together in a collaborative editor, run and debug code in real time, and leave with concrete next steps.</p>
+              <div className="rounded-2xl bg-slate-100 dark:bg-slate-950/60 p-4">
+                <p className="text-sm text-slate-700 dark:text-slate-200">Mentor Bridge connects you with expert developers for hands-on, live coding sessions. Work together in a collaborative editor, run and debug code in real time, and leave with concrete next steps.</p>
               </div>
 
-              <div className="grid gap-3 rounded-2xl bg-white/5 p-4 text-sm text-slate-100">
+              <div className="grid gap-3 rounded-2xl bg-slate-50 dark:bg-white/5 p-4 text-sm text-slate-700 dark:text-slate-100">
                 <div className="flex items-center justify-between">
                   <span>Live coding</span>
-                  <span className="font-medium text-white">Pair-program together</span>
+                  <span className="font-medium text-slate-900 dark:text-white">Pair-program together</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Collaborative editor</span>
-                  <span className="font-medium text-white">Realtime sync & run</span>
+                  <span className="font-medium text-slate-900 dark:text-white">Realtime sync & run</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Personalized growth</span>
-                  <span className="font-medium text-white">Tailored learning plan</span>
+                  <span className="font-medium text-slate-900 dark:text-white">Tailored learning plan</span>
                 </div>
               </div>
             </div>

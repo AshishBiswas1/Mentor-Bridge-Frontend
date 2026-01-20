@@ -32,8 +32,8 @@ export function FeatureSection() {
       <div className="absolute inset-x-0 top-0 -z-10 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
       <div className="mx-auto max-w-6xl px-6">
         <div className="mx-auto max-w-3xl text-center">
-          <h2 className="font-display text-3xl text-white md:text-4xl">Your mentor, your roadmap</h2>
-          <p className="mt-4 text-base text-slate-300">
+          <h2 className="font-display text-3xl text-slate-900 dark:text-white md:text-4xl">Your mentor, your roadmap</h2>
+          <p className="mt-4 text-base text-slate-600 dark:text-slate-300">
             Every feature is crafted to help you learn faster, stay accountable, and ship work that matters.
           </p>
         </div>
@@ -45,11 +45,11 @@ export function FeatureSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-80px' }}
               transition={{ delay: index * 0.05, duration: 0.5, ease: 'easeOut' }}
-              className="group rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-xl shadow-black/20 backdrop-blur transition hover:border-primary/40 hover:bg-white/[0.08]"
+              className="group rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] p-6 shadow-xl shadow-slate-200/20 dark:shadow-black/20 backdrop-blur transition hover:border-primary/40 hover:bg-slate-50 dark:hover:bg-white/[0.08]"
             >
               <feature.Icon className="h-10 w-10 text-accent" />
-              <h3 className="mt-4 font-display text-xl text-white">{feature.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-300">{feature.description}</p>
+              <h3 className="mt-4 font-display text-xl text-slate-900 dark:text-white">{feature.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-700 dark:text-slate-300">{feature.description}</p>
               <div className="mt-6 h-[2px] w-1/2 origin-left scale-x-0 rounded-full bg-gradient-to-r from-primary to-accent transition duration-300 group-hover:scale-x-100" />
             </motion.div>
           ))}
