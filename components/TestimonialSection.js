@@ -28,8 +28,8 @@ export function TestimonialSection() {
     <section id="mentors" className="py-24">
       <div className="mx-auto max-w-6xl px-6">
         <div className="mx-auto max-w-3xl text-center">
-          <h2 className="font-display text-3xl text-white md:text-4xl">Success stories from learners and teams</h2>
-          <p className="mt-4 text-base text-slate-300">
+          <h2 className="font-display text-3xl text-slate-900 dark:text-white md:text-4xl">Success stories from learners and teams</h2>
+          <p className="mt-4 text-base text-slate-600 dark:text-slate-300">
             Trusted by engineers leveling up across the globe.
           </p>
         </div>
@@ -41,12 +41,12 @@ export function TestimonialSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-80px' }}
               transition={{ delay: index * 0.1, duration: 0.5, ease: 'easeOut' }}
-              className="flex h-full flex-col rounded-3xl border border-white/10 bg-white/[0.04] p-6 text-left text-sm text-slate-300 shadow-xl backdrop-blur"
+              className="flex h-full flex-col rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] p-6 text-left text-sm text-slate-700 dark:text-slate-300 shadow-xl backdrop-blur"
             >
-              <p className="flex-1 leading-relaxed">“{item.quote}”</p>
-              <footer className="mt-6 text-xs uppercase tracking-[0.3em] text-white/60">
-                <div className="font-semibold tracking-normal text-white">{item.name}</div>
-                <div className="tracking-normal text-slate-400">{item.role}</div>
+              <p className="flex-1 leading-relaxed">"{item.quote}"</p>
+              <footer className="mt-6 text-xs uppercase tracking-[0.3em] text-slate-500 dark:text-white/60">
+                <div className="font-semibold tracking-normal text-slate-900 dark:text-white">{item.name}</div>
+                <div className="tracking-normal text-slate-600 dark:text-slate-400">{item.role}</div>
               </footer>
             </motion.blockquote>
           ))}

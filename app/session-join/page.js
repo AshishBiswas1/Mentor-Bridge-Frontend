@@ -102,46 +102,46 @@ function SessionJoinContent() {
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: 'easeOut' }}
-      className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 p-6"
+      className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-6"
     >
-      <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-white/[0.02] p-8">
-        <h1 className="font-display text-2xl text-white mb-2">Join a Session</h1>
-        <p className="text-sm text-slate-400 mb-6">Enter your details and the session link to join as a student.</p>
+      <div className="w-full max-w-xl rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-8">
+        <h1 className="font-display text-2xl text-slate-900 dark:text-white mb-2">Join a Session</h1>
+        <p className="text-sm text-slate-700 dark:text-slate-400 mb-6">Enter your details and the session link to join as a student.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="text-xs uppercase text-white/60">Full name</label>
+            <label className="text-xs uppercase text-slate-600 dark:text-white/60">Full name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Your name"
               autoComplete="name"
-              className="mt-2 w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="mt-2 w-full rounded-2xl border border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-slate-950/80 px-4 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
 
           <div>
-            <label className="text-xs uppercase text-white/60">Email</label>
+            <label className="text-xs uppercase text-slate-600 dark:text-white/60">Email</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
               autoComplete="email"
-              className="mt-2 w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="mt-2 w-full rounded-2xl border border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-slate-950/80 px-4 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
 
           <div>
-            <label className="text-xs uppercase text-white/60">Session link</label>
+            <label className="text-xs uppercase text-slate-600 dark:text-white/60">Session link</label>
             <input
               type="text"
               value={link}
               onChange={(e) => setLink(e.target.value)}
               placeholder="Enter session link (e.g., abc123)"
               autoComplete="off"
-              className="mt-2 w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
+              className="mt-2 w-full rounded-2xl border border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-slate-950/80 px-4 py-3 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
 
@@ -160,7 +160,7 @@ function SessionJoinContent() {
             <button
               type="button"
               onClick={() => router.push('/')}
-              className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200"
+              className="rounded-full border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-3 text-sm text-slate-700 dark:text-slate-200"
             >
               Cancel
             </button>
@@ -173,7 +173,7 @@ function SessionJoinContent() {
 
 export default function SessionJoinPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 flex items-center justify-center"><div className="text-white">Loading...</div></div>}>
+    <Suspense fallback={<div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex items-center justify-center"><div className="text-slate-900 dark:text-white">Loading...</div></div>}>
       <SessionJoinContent />
     </Suspense>
   );

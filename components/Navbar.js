@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Bars3Icon } from '@heroicons/react/24/outline';
+import { Bars3Icon, SunIcon, MoonIcon } from '@heroicons/react/24/outline';
 import { Fragment, useEffect, useState } from 'react';
 import { Button } from './ui/Button';
 import { Dialog, Transition } from '@headlessui/react';
 import { useAuth } from './AuthProvider';
+import { useTheme } from './ThemeProvider';
 
 const navLinks = [
   { href: '#features', label: 'Features' },
@@ -33,6 +34,7 @@ export function Navbar() {
   }, [pathname]);
 
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const router = useRouter();
 
   const handleLogout = async () => {
@@ -46,22 +48,22 @@ export function Navbar() {
   return (
     <header
       className={`sticky top-0 z-50 transition-all ${
-        isScrolled ? 'bg-slate-950/85 backdrop-blur border-b border-white/5' : 'bg-transparent'
+        isScrolled ? 'bg-slate-50/85 dark:bg-slate-950/85 backdrop-blur border-b border-slate-200 dark:border-white/5' : 'bg-transparent'
       }`}
     >
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link href="/" className="flex items-center gap-2 font-display text-xl tracking-tight">
+        <Link href="/" className="flex items-center gap-2 font-display text-xl tracking-tight text-slate-900 dark:text-white">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
             MB
           </span>
           Mentor Bridge
         </Link>
-        <div className="hidden items-center gap-8 text-sm text-slate-200 md:flex">
+        <div className="hidden items-center gap-8 text-sm text-slate-700 dark:text-slate-200 md:flex">
           {!hideNavLinks && navLinks.map((item) => (
             <a
               key={item.href}
               href={item.href}
-              className="relative transition hover:text-white"
+              className="relative transition hover:text-slate-900 dark:hover:text-white"
             >
               {item.label}
               <span className="absolute inset-x-0 -bottom-2 h-[2px] origin-left scale-x-0 bg-primary transition-transform duration-200 ease-out hover:scale-x-100" />
@@ -69,9 +71,20 @@ export function Navbar() {
           ))}
         </div>
         <div className="hidden items-center gap-4 md:flex">
+          <button
+            onClick={toggleTheme}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-slate-200 transition hover:bg-slate-200 dark:hover:bg-white/10 hover:text-slate-900 dark:hover:text-white"
+            aria-label="Toggle theme"
+          >
+            {theme === 'dark' ? (
+              <SunIcon className="h-5 w-5" />
+            ) : (
+              <MoonIcon className="h-5 w-5" />
+            )}
+          </button>
           {user ? (
             <>
-              <div className="text-sm text-slate-200">{user.name ? `Hi, ${user.name.split(' ')[0]}` : user.email}</div>
+              <div className="text-sm text-slate-700 dark:text-slate-200">{user.name ? `Hi, ${user.name.split(' ')[0]}` : user.email}</div>
               <Button as="button" variant="ghost" onClick={handleLogout}>
                 Log out
               </Button>
@@ -85,8 +98,8 @@ export function Navbar() {
             </>
           )}
         </div>
-        <button className="md:hidden" aria-label="Open menu" onClick={() => setMobileOpen(true)}>
-          <Bars3Icon className="h-7 w-7 text-slate-100" />
+        <button className="md:hidden text-slate-900 dark:text-slate-100" aria-label="Open menu" onClick={() => setMobileOpen(true)}>
+          <Bars3Icon className="h-7 w-7" />
         </button>
       </nav>
 
@@ -113,22 +126,32 @@ export function Navbar() {
             leaveFrom="opacity-100 translate-y-0"
             leaveTo="opacity-0 translate-y-4"
           >
-            <Dialog.Panel className="fixed inset-x-4 top-20 origin-top rounded-3xl border border-white/10 bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
-              <nav className="space-y-4 text-base text-slate-100">
+            <Dialog.Panel className="fixed inset-x-4 top-20 origin-top rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-950/95 p-6 shadow-2xl backdrop-blur">
+              <nav className="space-y-4 text-base text-slate-900 dark:text-slate-100">
                 {!hideNavLinks && navLinks.map((item) => (
                   <a
                     key={item.href}
                     href={item.href}
-                    className="block rounded-2xl px-3 py-2 transition hover:bg-white/10"
+                    className="block rounded-2xl px-3 py-2 transition hover:bg-slate-100 dark:hover:bg-white/10"
                     onClick={() => setMobileOpen(false)}
                   >
                     {item.label}
                   </a>
                 ))}
                 <div className="mt-6 grid gap-3">
+                  <button
+                    onClick={() => { toggleTheme(); setMobileOpen(false); }}
+                    className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-3 text-sm text-slate-900 dark:text-slate-100 transition hover:bg-slate-200 dark:hover:bg-white/10"
+                  >
+                    {theme === 'dark' ? (
+                      <><SunIcon className="h-5 w-5" /> Light Mode</>
+                    ) : (
+                      <><MoonIcon className="h-5 w-5" /> Dark Mode</>
+                    )}
+                  </button>
                   {user ? (
                     <>
-                      <div className="px-3 py-2 text-sm text-slate-100">{user.name ? `Hi, ${user.name.split(' ')[0]}` : user.email}</div>
+                      <div className="px-3 py-2 text-sm text-slate-900 dark:text-slate-100">{user.name ? `Hi, ${user.name.split(' ')[0]}` : user.email}</div>
                       <Button as="button" variant="ghost" className="w-full justify-center" onClick={() => { handleLogout(); setMobileOpen(false); }}>
                         Log out
                       </Button>
