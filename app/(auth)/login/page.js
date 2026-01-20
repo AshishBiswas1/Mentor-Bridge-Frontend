@@ -45,7 +45,7 @@ export default function LoginPage() {
       transition={{ duration: 0.45, ease: 'easeOut' }}
     >
       <div className="mb-6">
-        <Link href="/" className="inline-flex items-center text-sm text-slate-300 hover:text-white">
+        <Link href="/" className="inline-flex items-center text-sm text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white">
           <svg xmlns="http://www.w3.org/2000/svg" className="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
@@ -53,8 +53,8 @@ export default function LoginPage() {
         </Link>
       </div>
       <div className="space-y-6 text-center">
-        <h1 className="font-display text-3xl text-white">Welcome back</h1>
-        <p className="text-sm text-slate-300">
+        <h1 className="font-display text-3xl text-slate-900 dark:text-white">Welcome back</h1>
+        <p className="text-sm text-slate-700 dark:text-slate-300">
           New to Mentor Bridge?{' '}
           <Link href="/signup" className="text-primary hover:text-primary/80">
             Create an account
@@ -63,7 +63,7 @@ export default function LoginPage() {
       </div>
       <form onSubmit={handleSubmit} className="mt-8 space-y-6">
         <div className="space-y-2">
-          <label htmlFor="email" className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60">
+          <label htmlFor="email" className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-600 dark:text-white/60">
             Email
           </label>
           <input
@@ -73,7 +73,7 @@ export default function LoginPage() {
             required
             value={form.email}
             onChange={handleChange}
-            className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-full rounded-2xl border border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-slate-950/80 px-4 py-3 text-sm text-slate-900 dark:text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
             placeholder="you@mentorbridge.dev"
           />
         </div>
@@ -81,13 +81,13 @@ export default function LoginPage() {
           <div className="flex items-center justify-between">
             <label
               htmlFor="password"
-              className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60"
+              className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-600 dark:text-white/60"
             >
               Password
             </label>
             <Link 
               href="/forgot-password"
-              className="text-xs text-slate-300 hover:text-primary transition"
+              className="text-xs text-slate-600 dark:text-slate-300 hover:text-primary transition"
             >
               Forgot password?
             </Link>
@@ -99,7 +99,7 @@ export default function LoginPage() {
             required
             value={form.password}
             onChange={handleChange}
-            className="w-full rounded-2xl border border-white/20 bg-slate-950/80 px-4 py-3 text-sm text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-full rounded-2xl border border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-slate-950/80 px-4 py-3 text-sm text-slate-900 dark:text-white transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
             placeholder="Your password"
           />
         </div>

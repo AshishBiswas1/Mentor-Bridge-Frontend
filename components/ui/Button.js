@@ -13,8 +13,8 @@ export function Button({ as = 'button', href, children, variant = 'primary', cla
     baseClasses,
     variant === 'primary' && 'bg-blue-600 text-white shadow-lg shadow-blue-500/30 hover:bg-blue-500 active:bg-blue-700',
     variant === 'secondary' &&
-      'bg-white/10 text-white hover:bg-white/20 border border-white/30 backdrop-blur-sm',
-    variant === 'ghost' && 'text-white hover:bg-white/10',
+      'bg-slate-200 dark:bg-white/10 text-slate-900 dark:text-white hover:bg-slate-300 dark:hover:bg-white/20 border border-slate-300 dark:border-white/30 backdrop-blur-sm',
+    variant === 'ghost' && 'text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-white/10',
     className,
   );
 

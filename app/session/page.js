@@ -12,10 +12,13 @@ import {
   StopIcon, 
   ShareIcon,
   CodeBracketIcon,
-  ChatBubbleLeftRightIcon
+  ChatBubbleLeftRightIcon,
+  SunIcon,
+  MoonIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
-import { monacoTheme } from '@/components/monaco-theme';
+import { useTheme } from '@/components/ThemeProvider';
+import { monacoThemeDark, monacoThemeLight } from '@/components/monaco-theme';
 
 // Camera and Mic toggle buttons with WebRTC controls
 function CameraButton({ isEnabled, onToggle, disabled }) {
@@ -25,7 +28,7 @@ function CameraButton({ isEnabled, onToggle, disabled }) {
       disabled={disabled}
       aria-pressed={isEnabled}
       title={isEnabled ? 'Turn camera off' : 'Turn camera on'}
-      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80' : 'bg-red-600/80'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80 hover:bg-green-600 dark:bg-green-600/80 dark:hover:bg-green-600' : 'bg-red-600/80 hover:bg-red-600 dark:bg-red-600/80 dark:hover:bg-red-600'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
     >
       {isEnabled ? (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -47,7 +50,7 @@ function MicButton({ isEnabled, onToggle, disabled }) {
       disabled={disabled}
       aria-pressed={isEnabled}
       title={isEnabled ? 'Mute mic' : 'Unmute mic'}
-      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80' : 'bg-red-600/80'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80 hover:bg-green-600 dark:bg-green-600/80 dark:hover:bg-green-600' : 'bg-red-600/80 hover:bg-red-600 dark:bg-red-600/80 dark:hover:bg-red-600'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
     >
       {isEnabled ? (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -84,6 +87,7 @@ function SessionPageContent() {
 
   // Auth (include loading to avoid ReferenceError)
   const { user, loading } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   // Core refs and state used throughout the component
   const editorRef = useRef(null);
@@ -141,6 +145,14 @@ function SessionPageContent() {
   useEffect(() => { userRef.current = user; }, [user]);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { participantsRef.current = participants; }, [participants]);
+  
+  // Update Monaco editor theme when global theme changes
+  useEffect(() => {
+    if (monacoRef.current && editorRef.current) {
+      monacoRef.current.editor.setTheme(theme === 'dark' ? 'mentor-bridge-dark' : 'mentor-bridge-light');
+    }
+  }, [theme]);
+  
   // Autofocus chat input when the floating chat panel is opened
   useEffect(() => {
     if (chatVisible) {
@@ -208,31 +220,31 @@ function SessionPageContent() {
             <span className="sr-only">Open chat</span>
           </button>
         ) : (
-          <div className="fixed right-6 pointer-events-auto w-80 border border-white/10 bg-slate-950/60 p-4 flex flex-col rounded-lg shadow-xl" style={{ zIndex: 9999, top: '7.5rem', bottom: '3.5rem' }}>
+          <div className="fixed right-6 pointer-events-auto w-80 border border-slate-300 dark:border-white/10 bg-white/95 dark:bg-slate-950/60 p-4 flex flex-col rounded-lg shadow-xl" style={{ zIndex: 9999, top: '7.5rem', bottom: '3.5rem' }}>
             <div className="flex items-start justify-between mb-3">
               <div>
-                <h3 className="text-sm font-semibold text-white">Chat</h3>
-                <p className="text-xs text-slate-400">Session chat</p>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Chat</h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400">Session chat</p>
               </div>
               <button
                 type="button"
                 onClick={() => setChatVisible(false)}
-                className="text-slate-300 hover:text-white ml-2"
+                className="text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white ml-2"
                 aria-label="Close chat"
               >
                 ✕
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto rounded-lg border border-white/6 bg-slate-900/40 p-3">
+            <div className="flex-1 overflow-y-auto rounded-lg border border-slate-200 dark:border-white/6 bg-slate-50 dark:bg-slate-900/40 p-3">
               <div className="flex flex-col gap-3">
                 {messages.length === 0 ? (
-                  <div className="text-xs text-slate-400">No messages yet</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400">No messages yet</div>
                 ) : (
                   messages.map((m) => (
                     <div key={m.id} className="text-sm">
-                      <div className="text-xs text-slate-400">{m.user}</div>
-                      <div className="mt-1 rounded-md bg-slate-800/60 px-3 py-2 text-slate-100">{m.content}</div>
+                      <div className="text-xs text-slate-600 dark:text-slate-400">{m.user}</div>
+                      <div className="mt-1 rounded-md bg-slate-200 dark:bg-slate-800/60 px-3 py-2 text-slate-900 dark:text-slate-100">{m.content}</div>
                     </div>
                   ))
                 )}
@@ -269,7 +281,7 @@ function SessionPageContent() {
                   autoFocus={false}
                   tabIndex={0}
                   style={{ zIndex: 70, position: 'relative', pointerEvents: 'auto' }}
-                  className="flex-1 rounded-lg bg-slate-900/60 border border-white/10 px-3 py-2 text-sm text-slate-100"
+                  className="flex-1 rounded-lg bg-slate-100 dark:bg-slate-900/60 border border-slate-300 dark:border-white/10 px-3 py-2 text-sm text-slate-900 dark:text-slate-100"
                 />
                 {/* focus-restorer runs in hook above; nothing to render here */}
                 <button
@@ -1776,9 +1788,12 @@ function SessionPageContent() {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
-    // Define our custom theme
-    monaco.editor.defineTheme('mentor-bridge-dark', monacoTheme);
-    monaco.editor.setTheme('mentor-bridge-dark');
+    // Define our custom themes
+    monaco.editor.defineTheme('mentor-bridge-dark', monacoThemeDark);
+    monaco.editor.defineTheme('mentor-bridge-light', monacoThemeLight);
+    
+    // Set theme based on current theme state
+    monaco.editor.setTheme(theme === 'dark' ? 'mentor-bridge-dark' : 'mentor-bridge-light');
 
     // Listen for cursor/selection changes and emit cursor position to peers
     try {
@@ -2066,23 +2081,23 @@ function SessionPageContent() {
   // Loading check - show loading state while auth is initializing
   if (loading || (!user && !guest)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200">
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="space-y-4 text-center"
         >
-          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-white/10 border-t-primary" />
-          <p className="text-sm text-slate-400">Loading session...</p>
+          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-slate-200 dark:border-white/10 border-t-primary" />
+          <p className="text-sm text-slate-600 dark:text-slate-400">Loading session...</p>
         </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Header */}
-      <header className="border-b border-white/10 bg-slate-950/80 backdrop-blur-sm">
+      <header className="border-b border-slate-200 dark:border-white/10 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-sm">
         <div className="flex h-16 items-center justify-between px-6">
           <div className="flex items-center gap-4">
             {/* Back button removed */}
@@ -2103,8 +2118,8 @@ function SessionPageContent() {
           <div className="flex items-center gap-3">
             {/* Participants */}
             <div className="flex items-center gap-2">
-              <ChatBubbleLeftRightIcon className="h-4 w-4 text-slate-400" />
-              <span className="text-sm text-slate-300">
+              <ChatBubbleLeftRightIcon className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+              <span className="text-sm text-slate-700 dark:text-slate-300">
                 {session ? (
                   (session.mentor_name && !participantsLeft.has('mentor') ? 1 : 0) + 
                   (session.student_name && !participantsLeft.has('student') ? 1 : 0)
@@ -2114,11 +2129,23 @@ function SessionPageContent() {
             
             {/* Action buttons */}
             <div className="flex items-center gap-2">
+              {/* Theme Toggle */}
+              <button
+                onClick={toggleTheme}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/10 p-2 transition hover:border-primary/40 hover:bg-slate-200 dark:hover:bg-primary/20"
+                title="Toggle theme"
+              >
+                {theme === 'dark' ? (
+                  <SunIcon className="h-4 w-4" />
+                ) : (
+                  <MoonIcon className="h-4 w-4" />
+                )}
+              </button>
               {/* Copy code removed */}
               {isMentor && session?.status === 'pending' && (
                 <button
                   onClick={() => setShowNewLinkModal(true)}
-                  className="rounded-full border border-yellow-500/40 bg-yellow-500/20 px-4 py-2 text-sm font-semibold text-yellow-300 transition hover:bg-yellow-500/30"
+                  className="rounded-full border border-amber-600/40 dark:border-yellow-500/40 bg-amber-100 dark:bg-yellow-500/20 px-4 py-2 text-sm font-semibold text-amber-800 dark:text-yellow-300 transition hover:bg-amber-200 dark:hover:bg-yellow-500/30"
                   title="Generate new session link"
                 >
                   Generate New Link
@@ -2126,7 +2153,7 @@ function SessionPageContent() {
               )}
               <button
                 onClick={shareSession}
-                className="rounded-full border border-white/10 bg-white/10 p-2 transition hover:border-primary/40 hover:bg-primary/20"
+                className="rounded-full border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/10 p-2 transition hover:border-primary/40 hover:bg-slate-200 dark:hover:bg-primary/20"
                 title="Share session"
               >
                 <ShareIcon className="h-4 w-4" />
@@ -2145,9 +2172,9 @@ function SessionPageContent() {
       {/* Generate New Link Modal */}
       {showNewLinkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Generate New Session Link</h3>
-            <p className="text-sm text-slate-400 mb-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Generate New Session Link</h3>
+            <p className="text-sm text-slate-700 dark:text-slate-400 mb-4">
               This will create a new unique link for this session. The previous link will become invalid, 
               and any students who haven't joined yet will need the new link to join.
             </p>
@@ -2158,7 +2185,7 @@ function SessionPageContent() {
               <button
                 onClick={() => setShowNewLinkModal(false)}
                 disabled={generatingNewLink}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 disabled:opacity-50"
+                className="rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-300 disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -2177,9 +2204,9 @@ function SessionPageContent() {
       {/* Share modal */}
       {showShareModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Share Session</h3>
-            <p className="text-sm text-slate-400 mb-4">Copy the join link for students to join the session.</p>
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Share Session</h3>
+            <p className="text-sm text-slate-700 dark:text-slate-400 mb-4">Copy the join link for students to join the session.</p>
 
             <div className="mb-4">
               <label className="text-xs text-slate-300">Session link</label>
@@ -2216,7 +2243,7 @@ function SessionPageContent() {
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowShareModal(false)}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                className="rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-300"
               >
                 Close
               </button>
@@ -2228,9 +2255,9 @@ function SessionPageContent() {
       {/* Leave / End Session modal for mentors */}
       {showLeaveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Leave Session</h3>
-            <p className="text-sm text-slate-400 mb-4">You can either leave this session (you will be removed) or end the session for everyone. Ending the session will disconnect all participants.</p>
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Leave Session</h3>
+            <p className="text-sm text-slate-700 dark:text-slate-400 mb-4">You can either leave this session (you will be removed) or end the session for everyone. Ending the session will disconnect all participants.</p>
 
             <div className="flex items-center gap-3">
               <button
@@ -2238,7 +2265,7 @@ function SessionPageContent() {
                   // Mentor chooses to leave but not end session — call public leave
                   leavePublic();
                 }}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200"
+                className="rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-200"
               >
                 Leave
               </button>
@@ -2255,7 +2282,7 @@ function SessionPageContent() {
 
               <button
                 onClick={closeLeaveModal}
-                className="ml-auto rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                className="ml-auto rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-300"
               >
                 Cancel
               </button>
@@ -2266,46 +2293,46 @@ function SessionPageContent() {
 
       <div className="flex h-[calc(100vh-4rem)]">
         {/* Participants Sidebar */}
-        <aside className="w-64 border-r border-white/10 bg-slate-950/60 p-4 flex flex-col">
+        <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-950/60 p-4 flex flex-col">
           <div className="space-y-4 flex-1 overflow-y-auto">
             <div>
-              <h3 className="text-sm font-semibold text-white">Participants</h3>
-              <p className="text-xs text-slate-400">Active in this session</p>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Participants</h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400">Active in this session</p>
             </div>
             
             <div className="space-y-2">
               {/* Render mentor if present in session and hasn't left */}
               {session && session.mentor_name && !participantsLeft.has('mentor') && (
-                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.02] p-3">
                   <div className="flex-shrink-0">
                     <div className="relative">
                       <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
                         {session.mentor_name.charAt(0).toUpperCase()}
                       </div>
-                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-100 dark:border-slate-950" />
                     </div>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{session.mentor_name}</p>
-                    <p className="text-xs text-slate-400">Mentor</p>
+                    <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{session.mentor_name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Mentor</p>
                   </div>
                 </div>
               )}
 
               {/* Render student if present in session and hasn't left */}
               {session && session.student_name && !participantsLeft.has('student') && (
-                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.02] p-3">
                   <div className="flex-shrink-0">
                     <div className="relative">
                       <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
                         {session.student_name.charAt(0).toUpperCase()}
                       </div>
-                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-100 dark:border-slate-950" />
                     </div>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{session.student_name}</p>
-                    <p className="text-xs text-slate-400">Student</p>
+                    <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{session.student_name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Student</p>
                   </div>
                 </div>
               )}
@@ -2317,8 +2344,8 @@ function SessionPageContent() {
                 (participantsLeft.has('mentor') && !session.student_name) ||
                 (participantsLeft.has('student') && !session.mentor_name)
               ) && (
-                <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.02] p-4 text-center">
-                  <p className="text-xs text-slate-400">No participants yet</p>
+                <div className="rounded-lg border border-dashed border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-white/[0.02] p-4 text-center">
+                  <p className="text-xs text-slate-600 dark:text-slate-400">No participants yet</p>
                 </div>
               )}
             </div>
@@ -2328,10 +2355,10 @@ function SessionPageContent() {
 
             {/* Video / call box sits at bottom of the participants panel and spans full width */}
             <div className="mt-auto">
-              <div className="w-full rounded-xl border border-white/10 bg-black/60 shadow-lg">
+              <div className="w-full rounded-xl border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-black/60 shadow-lg">
                 <div className="p-2">
                   {/* Remote video stream */}
-                  <div className="relative h-32 w-full overflow-hidden rounded-md bg-slate-900">
+                  <div className="relative h-32 w-full overflow-hidden rounded-md bg-slate-800 dark:bg-slate-900">
                     {remoteStream ? (
                       <video
                         ref={remoteVideoRef}
@@ -2341,14 +2368,14 @@ function SessionPageContent() {
                         className="h-full w-full object-cover"
                       />
                     ) : (
-                      <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">
+                      <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-300 dark:text-slate-400">
                         {isConnecting ? 'Connecting...' : 'Waiting for remote video'}
                       </div>
                     )}
                     
                     {/* Local video (Picture-in-Picture) */}
                     {localStream && (
-                      <div className="absolute bottom-2 right-2 h-16 w-20 overflow-hidden rounded-md border border-white/20 bg-slate-900">
+                      <div className="absolute bottom-2 right-2 h-16 w-20 overflow-hidden rounded-md border border-slate-300 dark:border-white/20 bg-slate-700 dark:bg-slate-900">
                         <video
                           ref={localVideoRef}
                           autoPlay
@@ -2363,13 +2390,13 @@ function SessionPageContent() {
                   {/* Status info */}
                   <div className="mt-2 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${remoteStream ? 'bg-green-500' : 'bg-slate-600'}`} />
-                      <div className="text-xs text-slate-400">
+                      <div className={`h-2 w-2 rounded-full ${remoteStream ? 'bg-green-500' : 'bg-slate-400 dark:bg-slate-600'}`} />
+                      <div className="text-xs text-slate-600 dark:text-slate-400">
                         {remoteStream ? 'Connected' : isConnecting ? 'Connecting...' : 'Not connected'}
                       </div>
                     </div>
                     {localStream && (
-                      <div className="flex items-center gap-1 text-xs text-slate-400">
+                      <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
                         <div className={`h-2 w-2 rounded-full ${cameraEnabled ? 'bg-green-500' : 'bg-red-500'}`} />
                         <div className={`h-2 w-2 rounded-full ${micEnabled ? 'bg-green-500' : 'bg-red-500'}`} />
                       </div>
@@ -2419,7 +2446,7 @@ function SessionPageContent() {
                 value={code}
                 onChange={handleEditorChange}
                 onMount={handleEditorDidMount}
-                theme="mentor-bridge-dark"
+                theme={theme === 'dark' ? 'mentor-bridge-dark' : 'mentor-bridge-light'}
                 options={{
                   fontSize: 14,
                   fontFamily: 'Fira Code, Monaco, Consolas, monospace',
@@ -2443,12 +2470,12 @@ function SessionPageContent() {
             </div>
 
             {/* Output Panel (moved below the editor) */}
-            <div className="border-t border-white/10 bg-slate-950/60 h-48">
-              <div className="border-b border-white/10 bg-slate-950/40 p-3">
-                <h3 className="text-sm font-semibold text-white">Output</h3>
+            <div className="border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-950/60 h-48">
+              <div className="border-b border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-slate-950/40 p-3">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Output</h3>
               </div>
               <div className="h-full overflow-y-auto p-4">
-                <pre className="text-sm text-slate-300 whitespace-pre-wrap font-mono">
+                <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono">
                   {output || 'Click "Run Code" to see output...'}
                 </pre>
               </div>
@@ -2479,7 +2506,7 @@ function SessionPageContent() {
       {/* Bottom control strip with camera/mic buttons */}
       <div className="fixed left-0 right-0 bottom-0 z-50">
         <div className="mx-auto max-w-4xl px-4">
-          <div className="rounded-t-xl bg-slate-900/70 border-t border-white/5 py-3 shadow-xl backdrop-blur-sm">
+          <div className="rounded-t-xl bg-slate-100/90 dark:bg-slate-900/70 border-t border-slate-300/50 dark:border-white/5 py-3 shadow-xl backdrop-blur-sm">
             <div className="flex items-center justify-center gap-4">
               {/* Camera toggle */}
               <CameraButton 
@@ -2497,7 +2524,7 @@ function SessionPageContent() {
               
               {/* Connection status indicator */}
               {isConnecting && (
-                <div className="ml-4 flex items-center gap-2 text-sm text-slate-300">
+                <div className="ml-4 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                   <div className="h-2 w-2 animate-pulse rounded-full bg-primary" />
                   <span>Connecting...</span>
                 </div>

@@ -31,8 +31,8 @@ export function HowItWorksSection() {
           transition={{ duration: 0.6, ease: 'easeOut' }}
           className="flex-1"
         >
-          <h2 className="font-display text-3xl text-white md:text-4xl">A learning loop engineered for momentum</h2>
-          <p className="mt-4 text-base text-slate-300">
+          <h2 className="font-display text-3xl text-slate-900 dark:text-white md:text-4xl">A learning loop engineered for momentum</h2>
+          <p className="mt-4 text-base text-slate-600 dark:text-slate-300">
             Mentor Bridge combines expert feedback, habit-building, and real-world projects into one rhythm, so you keep shipping and never plateau.
           </p>
         </motion.div>
@@ -44,14 +44,14 @@ export function HowItWorksSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: '-80px' }}
               transition={{ delay: index * 0.1, duration: 0.5, ease: 'easeOut' }}
-              className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur"
+              className="relative overflow-hidden rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] p-6 backdrop-blur"
             >
               <span className="absolute -left-10 top-6 flex h-20 w-20 items-center justify-center rounded-full bg-primary/20 text-4xl font-semibold text-primary/90">
                 0{index + 1}
               </span>
               <div className="ml-12">
-                <h3 className="font-display text-xl text-white">{step.title}</h3>
-                <p className="mt-3 text-sm text-slate-300">{step.description}</p>
+                <h3 className="font-display text-xl text-slate-900 dark:text-white">{step.title}</h3>
+                <p className="mt-3 text-sm text-slate-700 dark:text-slate-300">{step.description}</p>
                 <div className="mt-4 flex flex-wrap gap-3 text-xs text-accent/90">
                   {step.stats.map((stat) => (
                     <span
