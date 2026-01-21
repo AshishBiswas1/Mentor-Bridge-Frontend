@@ -414,16 +414,53 @@ function SessionPageContent() {
     return null;
   };
 
-  // Helper: Create a black video stream for when camera is off
+  // Helper: Create a video stream with participant's initial for when camera is off
   const createBlackVideoStream = () => {
     const canvas = document.createElement('canvas');
     canvas.width = 640;
     canvas.height = 480;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = 'black';
+    
+    // Fill with dark background
+    ctx.fillStyle = '#1e293b'; // slate-800
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    const stream = canvas.captureStream(30); // 30 FPS black stream
+    // Get LOCAL participant's name (the one who turned off the camera)
+    let localName = '';
+    if (session) {
+      // If current user is mentor, show mentor's name, otherwise show student's name
+      const currentUserIsMentor = isMentorRef.current;
+      if (currentUserIsMentor) {
+        localName = session.mentor_name || user?.name || 'M';
+      } else {
+        localName = session.student_name || guest?.name || user?.name || 'S';
+      }
+    }
+    
+    // Draw circular background for the initial
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = 80;
+    
+    // Create gradient for circle
+    const gradient = ctx.createLinearGradient(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+    gradient.addColorStop(0, '#2563eb'); // primary blue
+    gradient.addColorStop(1, '#7c3aed'); // accent purple
+    ctx.fillStyle = gradient;
+    
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    // Draw the initial letter
+    const initial = localName.charAt(0).toUpperCase();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 80px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(initial, centerX, centerY);
+    
+    const stream = canvas.captureStream(30); // 30 FPS stream
     return stream;
   };
 
@@ -1149,6 +1186,16 @@ function SessionPageContent() {
       } catch (e) {
         setSession(sessionData || null);
       }
+      
+      // When session is joined, ensure current user is not in participantsLeft
+      const localIsMentor = isMentorRef.current;
+      const currentRole = localIsMentor ? 'mentor' : 'student';
+      setParticipantsLeft((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(currentRole);
+        return newSet;
+      });
+      
       // Join signaling room for video calls when session data is available
       try {
         const room = (sessionData && (sessionData.link || sessionData.id)) || link;
@@ -1206,33 +1253,37 @@ function SessionPageContent() {
 
     socket.on('session-update', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
+      
+      // Always update session state to ensure UI reflects latest data
+      sessionJsonRef.current = JSON.stringify(sessionData || {});
+      setSession(sessionData || null);
+
+      // Check if student has rejoined and remove them from participantsLeft
+      if (sessionData?.student_name) {
+        setParticipantsLeft((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete('student');
+          return newSet;
+        });
+      }
+
+      // refresh participants list when session updates
+      const built = buildParticipants(sessionData);
+      participantsJsonRef.current = JSON.stringify(built || []);
+      setParticipants(built);
+
+      // Apply any explicit presence overrides we've received from sockets
+      // If mentor/student left, remove them from the list (don't just mark inactive)
       try {
-        const serialized = JSON.stringify(sessionData || {});
-        if (sessionJsonRef.current !== serialized) {
-          sessionJsonRef.current = serialized;
-          setSession(sessionData || null);
+        const pres = presenceRef.current || { mentorPresent: null, studentPresent: null };
+        if (pres.mentorPresent === false) {
+          setParticipants((prev) => prev.filter((p) => p.role !== 'mentor'));
         }
-
-        // refresh participants list when session updates
-        const built = buildParticipants(sessionData);
-        const pSerialized = JSON.stringify(built || []);
-        if (participantsJsonRef.current !== pSerialized) {
-          participantsJsonRef.current = pSerialized;
-          setParticipants(built);
+        if (pres.studentPresent === false) {
+          setParticipants((prev) => prev.filter((p) => p.role !== 'student'));
         }
-
-        // Apply any explicit presence overrides we've received from sockets
-        // If mentor/student left, remove them from the list (don't just mark inactive)
-        try {
-          const pres = presenceRef.current || { mentorPresent: null, studentPresent: null };
-          if (pres.mentorPresent === false) {
-            setParticipants((prev) => prev.filter((p) => p.role !== 'mentor'));
-          }
-          if (pres.studentPresent === false) {
-            setParticipants((prev) => prev.filter((p) => p.role !== 'student'));
-          }
-        } catch (e) {}
       } catch (e) {}
+      
       // update active state/timer
       try {
         updateSessionState(sessionData);
@@ -1248,6 +1299,13 @@ function SessionPageContent() {
 
         // Track that this role has left so we can hide them in the UI
         setParticipantsLeft((prev) => new Set(prev).add(role));
+        
+        // Clean up WebRTC connection when participant leaves so we can reconnect when they rejoin
+        try {
+          cleanupWebRTC();
+        } catch (e) {
+          console.error('Error cleaning up WebRTC on participant leave:', e);
+        }
       } catch (e) {}
     });
 
@@ -1278,10 +1336,38 @@ function SessionPageContent() {
             } catch (e) {
               setSession(sessionData);
             }
+            
+            // Rebuild participants list to ensure rejoined mentor is displayed
+            try {
+              const built = buildParticipants(sessionData);
+              const pSerialized = JSON.stringify(built || []);
+              if (participantsJsonRef.current !== pSerialized) {
+                participantsJsonRef.current = pSerialized;
+                setParticipants(built);
+              }
+            } catch (e) {}
+            
             try { updateSessionState(sessionData); } catch (e) {}
           }
         } catch (e) {
           // ignore fetch errors
+        }
+
+        // If current user is student and mentor rejoined, initiate WebRTC connection
+        const currentRole = sessionStorage.getItem('userRole');
+        if (currentRole === 'student') {
+          // Clean up any existing connection first
+          cleanupWebRTC();
+          
+          // Wait a bit for mentor's socket listeners to be ready
+          await new Promise(res => setTimeout(res, 500));
+          
+          // Initiate new WebRTC connection to the rejoined mentor
+          try {
+            await startCall();
+          } catch (e) {
+            console.error('Failed to initiate call to rejoined mentor:', e);
+          }
         }
       } catch (e) {}
     });
@@ -1300,21 +1386,48 @@ function SessionPageContent() {
           return newSet;
         });
 
+        // If this is a student rejoining and current user is mentor, initiate WebRTC connection
+        const localIsMentor = isMentorRef.current;
+        if (localIsMentor && role === 'student') {
+          try {
+            // Clean up any existing connection first
+            cleanupWebRTC();
+            
+            // Ensure media is ready
+            if (!activeStreamRef.current) {
+              await initializeMedia();
+            }
+            
+            // Give the student a moment to set up their socket listeners
+            setTimeout(() => {
+              try {
+                startCall();
+              } catch (e) {
+                console.error('Error starting call after participant joined:', e);
+              }
+            }, 500);
+          } catch (e) {
+            console.error('Error handling participant rejoin:', e);
+          }
+        }
+
         // Fetch latest session data to refresh UI (participant name may be present there)
         try {
           const resp = await fetch(`${BASE}/session?link=${encodeURIComponent(link)}`);
           const json = await resp.json().catch(() => null);
           const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
           if (sessionData) {
+            // Always update session state when participant joins to ensure student name is displayed
+            sessionJsonRef.current = JSON.stringify(sessionData || {});
+            setSession(sessionData);
+            
+            // Rebuild participants list to ensure rejoined student is displayed
             try {
-              const serialized = JSON.stringify(sessionData || {});
-              if (sessionJsonRef.current !== serialized) {
-                sessionJsonRef.current = serialized;
-                setSession(sessionData);
-              }
-            } catch (e) {
-              setSession(sessionData);
-            }
+              const built = buildParticipants(sessionData);
+              participantsJsonRef.current = JSON.stringify(built || []);
+              setParticipants(built);
+            } catch (e) {}
+            
             try { updateSessionState(sessionData); } catch (e) {}
           }
         } catch (e) {
@@ -1586,7 +1699,7 @@ function SessionPageContent() {
           setError((data && data.message) || 'Session not found');
         }
       })
-      .catch(() => setError('Failed to load session'));
+      .catch((err) => setError(err?.message || 'Network error. Please check your connection and try again.'));
 
     return () => {
       try {
@@ -1601,12 +1714,29 @@ function SessionPageContent() {
 
   // Initialize WebRTC media eagerly when session is loaded
   useEffect(() => {
-    // Only initialize if we don't have an active stream
-    if (session && link && !activeStreamRef.current) {
-      // Initialize media immediately to avoid delays when call starts
-      initializeMedia().catch(err => {
-        console.error('Failed to initialize media:', err);
-      });
+    const setupMedia = async () => {
+      // Initialize media if we don't have an active stream
+      if (!activeStreamRef.current) {
+        try {
+          await initializeMedia();
+        } catch (err) {
+          console.error('Failed to initialize media:', err);
+          return;
+        }
+      }
+
+      // After media is ready (or already available), signal to other participants
+      const localIsMentor = isMentorRef.current;
+      const room = (session && (session.link || session.id)) || link;
+      
+      if (signalSocketRef.current && signalSocketRef.current.connected && room) {
+        // Emit participant-ready so other side knows to initiate/accept connections
+        signalSocketRef.current.emit('participant-ready', { room, role: localIsMentor ? 'mentor' : 'student' });
+      }
+    };
+
+    if (session && link) {
+      setupMedia();
     }
 
     return () => {
@@ -2040,7 +2170,7 @@ function SessionPageContent() {
 
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        alert(json?.message || 'Failed to generate new link');
+        alert(json?.message || json?.error || 'Failed to generate new link');
         setGeneratingNewLink(false);
         return;
       }
@@ -2073,7 +2203,7 @@ function SessionPageContent() {
       alert('Failed to get new link from response');
       setGeneratingNewLink(false);
     } catch (e) {
-      alert(e?.message || 'Network error');
+      alert(e?.message || 'Network error. Please check your connection and try again.');
       setGeneratingNewLink(false);
     }
   };
@@ -2122,7 +2252,7 @@ function SessionPageContent() {
               <span className="text-sm text-slate-700 dark:text-slate-300">
                 {session ? (
                   (session.mentor_name && !participantsLeft.has('mentor') ? 1 : 0) + 
-                  (session.student_name && !participantsLeft.has('student') ? 1 : 0)
+                  ((session.student_name || guest?.name) && !participantsLeft.has('student') ? 1 : 0)
                 ) : 0} participants
               </span>
             </div>
@@ -2332,6 +2462,24 @@ function SessionPageContent() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{session.student_name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Student</p>
+                  </div>
+                </div>
+              )}
+              
+              {/* Fallback: Show guest student if session.student_name is not set but guest exists */}
+              {session && !session.student_name && guest?.name && !participantsLeft.has('student') && (
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.02] p-3">
+                  <div className="flex-shrink-0">
+                    <div className="relative">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
+                        {guest.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-100 dark:border-slate-950" />
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{guest.name}</p>
                     <p className="text-xs text-slate-600 dark:text-slate-400">Student</p>
                   </div>
                 </div>

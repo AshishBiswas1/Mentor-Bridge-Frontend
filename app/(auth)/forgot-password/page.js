@@ -33,12 +33,12 @@ export default function ForgotPasswordPage() {
 
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(json?.error || json?.message || 'Failed to send reset email.');
+        setError(json?.message || json?.error || 'Failed to send reset email.');
       } else {
         setSuccess(true);
       }
     } catch (err) {
-      setError('Failed to send reset email. Please try again.');
+      setError(err?.message || 'Network error. Please check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }
