@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -14,73 +14,63 @@ export default function ResetPasswordPage() {
   const router = useRouter();
   const [token, setToken] = useState(null);
   const [tokenChecked, setTokenChecked] = useState(false);
+  const hasProcessedToken = useRef(false);
 
   useEffect(() => {
-    // Read token from query string or URL fragment (#...) on client mount
-    if (token) return;
+    // Prevent duplicate processing
+    if (hasProcessedToken.current) return;
     if (typeof window === 'undefined') {
       setTokenChecked(true);
       return;
     }
 
-    console.log('Full URL:', window.location.href);
-    console.log('Search params:', window.location.search);
-    console.log('Hash:', window.location.hash);
+    hasProcessedToken.current = true;
 
     // Try query params first
     try {
       const qp = new URLSearchParams(window.location.search || '');
       const t = qp.get('access_token') || qp.get('token') || qp.get('accessToken');
       if (t) {
-        console.log('Token found in query params:', t.substring(0, 20) + '...');
         setToken(t);
         setTokenChecked(true);
         return;
       }
     } catch (e) {
-      console.error('Error parsing query params:', e);
+      // ignore
     }
 
     // Fallback: try hash fragment (Supabase returns token in fragment)
     const hash = window.location.hash || '';
     if (!hash) {
-      console.log('No hash fragment found');
       setTokenChecked(true);
       return;
     }
 
     try {
       const hashString = hash.startsWith('#') ? hash.slice(1) : hash;
-      console.log('Hash string:', hashString);
       const params = new URLSearchParams(hashString);
       
       // Supabase uses 'access_token' and includes 'type=recovery' for password reset
       const tokenType = params.get('type');
       const t = params.get('access_token') || params.get('token') || params.get('accessToken');
       
-      console.log('Token type:', tokenType);
-      console.log('Token found in hash:', t ? t.substring(0, 20) + '...' : 'null');
-      
-      // Accept token if found (removed type check for now to debug)
-      if (t) {
+      // Accept token if found and type is recovery
+      if (t && tokenType === 'recovery') {
         setToken(t);
-        console.log('Token set successfully');
         // remove hash from URL to keep it clean
         try {
           const newUrl = window.location.pathname + window.location.search;
           window.history.replaceState({}, document.title, newUrl);
         } catch (e) {
-          console.error('Error updating URL:', e);
+          // ignore
         }
-      } else {
-        console.log('No token found in hash params');
       }
     } catch (e) {
-      console.error('Error parsing hash fragment:', e);
+      // ignore parse errors
     } finally {
       setTokenChecked(true);
     }
-  }, [token]);
+  }, []);
   
   const [form, setForm] = useState(initialState);
   const [error, setError] = useState('');
