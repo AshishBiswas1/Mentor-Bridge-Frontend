@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -14,13 +14,28 @@ export default function ResetPasswordPage() {
   const router = useRouter();
   const [token, setToken] = useState(null);
   const [tokenChecked, setTokenChecked] = useState(false);
+  const hasProcessedToken = useRef(false);
 
   useEffect(() => {
-    // Read token from query string or URL fragment (#...) on client mount
-    if (token) return;
+    // Prevent duplicate processing
+    if (hasProcessedToken.current) return;
     if (typeof window === 'undefined') {
       setTokenChecked(true);
       return;
+    }
+
+    hasProcessedToken.current = true;
+
+    // First, check if we have a token stored in sessionStorage
+    try {
+      const storedToken = sessionStorage.getItem('reset_password_token');
+      if (storedToken) {
+        setToken(storedToken);
+        setTokenChecked(true);
+        return;
+      }
+    } catch (e) {
+      // ignore
     }
 
     // Try query params first
@@ -28,6 +43,7 @@ export default function ResetPasswordPage() {
       const qp = new URLSearchParams(window.location.search || '');
       const t = qp.get('access_token') || qp.get('token') || qp.get('accessToken');
       if (t) {
+        sessionStorage.setItem('reset_password_token', t);
         setToken(t);
         setTokenChecked(true);
         return;
@@ -36,7 +52,7 @@ export default function ResetPasswordPage() {
       // ignore
     }
 
-    // Fallback: try hash fragment (some providers return token in fragment)
+    // Fallback: try hash fragment (Supabase returns token in fragment)
     const hash = window.location.hash || '';
     if (!hash) {
       setTokenChecked(true);
@@ -44,10 +60,18 @@ export default function ResetPasswordPage() {
     }
 
     try {
-      const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+      const hashString = hash.startsWith('#') ? hash.slice(1) : hash;
+      const params = new URLSearchParams(hashString);
+      
+      // Supabase uses 'access_token' and includes 'type=recovery' for password reset
+      const tokenType = params.get('type');
       const t = params.get('access_token') || params.get('token') || params.get('accessToken');
-      if (t) {
+      
+      // Accept token if found and type is recovery
+      if (t && tokenType === 'recovery') {
+        sessionStorage.setItem('reset_password_token', t);
         setToken(t);
+        setTokenChecked(true);
         // remove hash from URL to keep it clean
         try {
           const newUrl = window.location.pathname + window.location.search;
@@ -55,13 +79,14 @@ export default function ResetPasswordPage() {
         } catch (e) {
           // ignore
         }
+      } else {
+        setTokenChecked(true);
       }
     } catch (e) {
       // ignore parse errors
-    } finally {
       setTokenChecked(true);
     }
-  }, [token]);
+  }, []);
   
   const [form, setForm] = useState(initialState);
   const [error, setError] = useState('');
@@ -134,6 +159,12 @@ export default function ResetPasswordPage() {
       if (!res.ok) {
         setError(json?.message || json?.error || 'Failed to reset password.');
       } else {
+        // Clear stored token on success
+        try {
+          sessionStorage.removeItem('reset_password_token');
+        } catch (e) {
+          // ignore
+        }
         setSuccess(true);
       }
     } catch (err) {
