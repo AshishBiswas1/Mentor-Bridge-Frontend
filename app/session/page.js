@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo, Suspense } from 'react';
+import { useEffect, useState, useRef, useMemo, Suspense, memo } from 'react';
+import ReactDOM from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -11,10 +12,13 @@ import {
   StopIcon, 
   ShareIcon,
   CodeBracketIcon,
-  ChatBubbleLeftRightIcon
+  ChatBubbleLeftRightIcon,
+  SunIcon,
+  MoonIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/components/AuthProvider';
-import { monacoTheme } from '@/components/monaco-theme';
+import { useTheme } from '@/components/ThemeProvider';
+import { monacoThemeDark, monacoThemeLight } from '@/components/monaco-theme';
 
 // Camera and Mic toggle buttons with WebRTC controls
 function CameraButton({ isEnabled, onToggle, disabled }) {
@@ -24,7 +28,7 @@ function CameraButton({ isEnabled, onToggle, disabled }) {
       disabled={disabled}
       aria-pressed={isEnabled}
       title={isEnabled ? 'Turn camera off' : 'Turn camera on'}
-      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80' : 'bg-red-600/80'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80 hover:bg-green-600 dark:bg-green-600/80 dark:hover:bg-green-600' : 'bg-red-600/80 hover:bg-red-600 dark:bg-red-600/80 dark:hover:bg-red-600'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
     >
       {isEnabled ? (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -46,7 +50,7 @@ function MicButton({ isEnabled, onToggle, disabled }) {
       disabled={disabled}
       aria-pressed={isEnabled}
       title={isEnabled ? 'Mute mic' : 'Unmute mic'}
-      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80' : 'bg-red-600/80'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
+      className={`flex h-12 w-12 items-center justify-center rounded-full ${isEnabled ? 'bg-green-600/80 hover:bg-green-600 dark:bg-green-600/80 dark:hover:bg-green-600' : 'bg-red-600/80 hover:bg-red-600 dark:bg-red-600/80 dark:hover:bg-red-600'} text-white transition disabled:opacity-50 disabled:cursor-not-allowed`}
     >
       {isEnabled ? (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -83,6 +87,7 @@ function SessionPageContent() {
 
   // Auth (include loading to avoid ReferenceError)
   const { user, loading } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   // Core refs and state used throughout the component
   const editorRef = useRef(null);
@@ -96,9 +101,11 @@ function SessionPageContent() {
   const localParticipantNameRef = useRef(null);
   const userRef = useRef(null);
   const sessionRef = useRef(null);
+  const sessionJsonRef = useRef(null);
   const chatStudentNameRef = useRef(null);
   const chatInputRef = useRef(null);
   const participantsRef = useRef([]);
+  const participantsJsonRef = useRef(null);
   const isMentorRef = useRef(false);
   const iceCandidatesQueue = useRef([]);
   const presenceRef = useRef({});
@@ -109,9 +116,12 @@ function SessionPageContent() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteMutedRef = useRef(true);
+  const activeStreamRef = useRef(null); // Track actual hardware stream for reliable cleanup
+  const isInitializingRef = useRef(false); // Lock to prevent race conditions
 
   const codeRef = useRef(INITIAL_CODE);
   const emitTimeout = useRef(null);
+  const typingEmitRef = useRef(0);
 
   const [guest, setGuest] = useState(null);
   const [session, setSession] = useState(null);
@@ -126,14 +136,187 @@ function SessionPageContent() {
   const [micEnabled, setMicEnabled] = useState(true);
 
   const [isConnecting, setIsConnecting] = useState(false);
-  const [remoteMuted, setRemoteMuted] = useState(true);
+  const [remoteMuted, setRemoteMuted] = useState(false);
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
+  const [chatVisible, setChatVisible] = useState(false);
 
   // Keep refs in sync with latest state so external socket handlers can read current values
   useEffect(() => { userRef.current = user; }, [user]);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { participantsRef.current = participants; }, [participants]);
+  
+  // Update Monaco editor theme when global theme changes
+  useEffect(() => {
+    if (monacoRef.current && editorRef.current) {
+      monacoRef.current.editor.setTheme(theme === 'dark' ? 'mentor-bridge-dark' : 'mentor-bridge-light');
+    }
+  }, [theme]);
+  
+  // Autofocus chat input when the floating chat panel is opened
+  useEffect(() => {
+    if (chatVisible) {
+      try { setTimeout(() => { chatInputRef.current?.focus(); }, 50); } catch (e) {}
+    }
+  }, [chatVisible]);
+  
+  // Chat portal component: renders chat UI into document.body to avoid stacking-context issues
+  const ChatPortal = useMemo(() => memo((props) => {
+    const { chatVisible, setChatVisible, messages, chatInput, setChatInput, chatInputRef, session, link, chatStudentNameRef, user, guest, socketRef, setMessages } = props;
+    const [el, setEl] = useState(null);
+    const createdRef = useRef(false);
+
+    useEffect(() => {
+      try {
+        // Reuse existing container if present to avoid DOM churn when parent re-mounts
+        let container = document.getElementById('floating-chat-root');
+        if (!container) {
+          container = document.createElement('div');
+          container.setAttribute('id', 'floating-chat-root');
+          document.body.appendChild(container);
+          createdRef.current = true;
+        }
+        setEl(container);
+        return () => {
+          try {
+            if (createdRef.current && container && container.parentNode) {
+              container.parentNode.removeChild(container);
+            }
+          } catch (e) {}
+        };
+      } catch (e) {
+        return undefined;
+      }
+    }, []);
+
+    // Restore focus/selection on the chat input if messages update and the input lost focus.
+    useEffect(() => {
+      if (!chatVisible) return;
+      try {
+        const elInput = chatInputRef?.current;
+        if (!elInput) return;
+        if (document.activeElement !== elInput) {
+          const start = elInput.selectionStart ?? 0;
+          const end = elInput.selectionEnd ?? start;
+          elInput.focus();
+          try { elInput.setSelectionRange(start, end); } catch (e) {}
+        }
+      } catch (e) {}
+    }, [messages, chatVisible]);
+
+    const chatBox = useMemo(() => (
+      <div>
+        {!chatVisible ? (
+          <button
+            type="button"
+            onClick={() => setChatVisible(true)}
+            aria-label="Open chat"
+            className="fixed bottom-6 right-6 pointer-events-auto flex items-center gap-2 bg-primary px-4 py-3 rounded-full shadow-lg text-white"
+            style={{ zIndex: 9999 }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v7a2 2 0 01-2 2H7l-5 3V5z" />
+            </svg>
+            <span className="sr-only">Open chat</span>
+          </button>
+        ) : (
+          <div className="fixed right-6 pointer-events-auto w-80 border border-slate-300 dark:border-white/10 bg-white/95 dark:bg-slate-950/60 p-4 flex flex-col rounded-lg shadow-xl" style={{ zIndex: 9999, top: '7.5rem', bottom: '3.5rem' }}>
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Chat</h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400">Session chat</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setChatVisible(false)}
+                className="text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white ml-2"
+                aria-label="Close chat"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto rounded-lg border border-slate-200 dark:border-white/6 bg-slate-50 dark:bg-slate-900/40 p-3">
+              <div className="flex flex-col gap-3">
+                {messages.length === 0 ? (
+                  <div className="text-xs text-slate-600 dark:text-slate-400">No messages yet</div>
+                ) : (
+                  messages.map((m) => (
+                    <div key={m.id} className="text-sm">
+                      <div className="text-xs text-slate-600 dark:text-slate-400">{m.user}</div>
+                      <div className="mt-1 rounded-md bg-slate-200 dark:bg-slate-800/60 px-3 py-2 text-slate-900 dark:text-slate-100">{m.content}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <div className="flex items-center gap-2" onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}>
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  value={chatInput}
+                  ref={chatInputRef}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const text = chatInput && chatInput.trim();
+                      if (!text) return;
+                      const sessionId = session?.id || link;
+                      const canonicalRoom = session?.link || session?.id || link;
+                      const studentName = chatStudentNameRef.current || session?.student_name || link;
+                      const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+                      const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
+                      try {
+                        setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
+                        if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
+                      } catch (e) {}
+                      setChatInput('');
+                    }
+                  }}
+                  onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
+                  onFocus={(e) => { try { e.stopPropagation(); } catch (e) {} }}
+                  autoFocus={false}
+                  tabIndex={0}
+                  style={{ zIndex: 70, position: 'relative', pointerEvents: 'auto' }}
+                  className="flex-1 rounded-lg bg-slate-100 dark:bg-slate-900/60 border border-slate-300 dark:border-white/10 px-3 py-2 text-sm text-slate-900 dark:text-slate-100"
+                />
+                {/* focus-restorer runs in hook above; nothing to render here */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const text = chatInput && chatInput.trim();
+                    if (!text) return;
+                    const sessionId = session?.id || link;
+                    const canonicalRoom = session?.link || session?.id || link;
+                    const studentName = chatStudentNameRef.current || session?.student_name || link;
+                    const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
+                    const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
+                    try {
+                      setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
+                      if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
+                    } catch (e) {}
+                    setChatInput('');
+                  }}
+                  className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white"
+                  style={{ pointerEvents: 'auto', zIndex: 70 }}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    ), [chatVisible, messages, chatInput, setChatVisible, setChatInput, chatInputRef, session, link, chatStudentNameRef, user, guest, socketRef, setMessages]);
+
+    if (!el) return null;
+
+    return ReactDOM.createPortal(chatBox, el);
+  }), []);
+  // Invoke ChatPortal once at top level to ensure the component is stable
   // Note: isMentorRef is synced after `isMentor` is declared to avoid temporal dead zone
   const [isRunning, setIsRunning] = useState(false);
   const [output, setOutput] = useState('');
@@ -214,7 +397,7 @@ function SessionPageContent() {
         localStorage.setItem(storageKey, codeContent);
       }
     } catch (e) {
-      console.warn('Failed to save code to localStorage', e);
+      // Failed to save code to localStorage
     }
   };
 
@@ -226,28 +409,100 @@ function SessionPageContent() {
         return localStorage.getItem(storageKey);
       }
     } catch (e) {
-      console.warn('Failed to load code from localStorage', e);
+      // Failed to load code from localStorage
     }
     return null;
   };
 
+  // Helper: Create a video stream with participant's initial for when camera is off
+  const createBlackVideoStream = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    
+    // Fill with dark background
+    ctx.fillStyle = '#1e293b'; // slate-800
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Get LOCAL participant's name (the one who turned off the camera)
+    let localName = '';
+    if (session) {
+      // If current user is mentor, show mentor's name, otherwise show student's name
+      const currentUserIsMentor = isMentorRef.current;
+      if (currentUserIsMentor) {
+        localName = session.mentor_name || user?.name || 'M';
+      } else {
+        localName = session.student_name || guest?.name || user?.name || 'S';
+      }
+    }
+    
+    // Draw circular background for the initial
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = 80;
+    
+    // Create gradient for circle
+    const gradient = ctx.createLinearGradient(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+    gradient.addColorStop(0, '#2563eb'); // primary blue
+    gradient.addColorStop(1, '#7c3aed'); // accent purple
+    ctx.fillStyle = gradient;
+    
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    // Draw the initial letter
+    const initial = localName.charAt(0).toUpperCase();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 80px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(initial, centerX, centerY);
+    
+    const stream = canvas.captureStream(30); // 30 FPS stream
+    return stream;
+  };
+
   // WebRTC Helper Functions
   const initializeMedia = async () => {
+    // Prevent duplicate calls - check if we already have an active stream
+    if (activeStreamRef.current) {
+      return activeStreamRef.current;
+    }
+
+    // Lock to prevent race conditions from simultaneous calls
+    if (isInitializingRef.current) {
+      // Wait for the in-progress initialization to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return activeStreamRef.current || initializeMedia();
+    }
+
+    isInitializingRef.current = true;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: { echoCancellation: true, noiseSuppression: true }
       });
       stream.getTracks().forEach(track => {
+        track.enabled = true;
       });
       
+      // Store in ref for reliable access
+      activeStreamRef.current = stream;
       setLocalStream(stream);
       
-      // Attach to local video element
+      // Attach to local video element immediately
       if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
+        const video = localVideoRef.current;
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play().catch(e => console.log('Local video autoplay failed:', e));
+        };
       }
       
+      isInitializingRef.current = false;
       return stream;
     } catch (error) {
       console.error('Error accessing media devices:', error);
@@ -257,14 +512,17 @@ function SessionPageContent() {
           video: false,
           audio: true
         });
+        activeStreamRef.current = audioStream;
         setLocalStream(audioStream);
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = audioStream;
         }
         setCameraEnabled(false);
+        isInitializingRef.current = false;
         return audioStream;
       } catch (audioError) {
         console.error('Error accessing audio:', audioError);
+        isInitializingRef.current = false;
         return null;
       }
     }
@@ -311,41 +569,9 @@ function SessionPageContent() {
       if (event.streams && event.streams[0]) {
         const tracks = event.streams[0].getTracks();
         setRemoteStream(event.streams[0]);
-        
-        if (remoteVideoRef.current) {
-          try {
-            remoteVideoRef.current.muted = !!remoteMutedRef.current;
-            remoteVideoRef.current.srcObject = event.streams[0];
-            
-            const playResult = remoteVideoRef.current.play();
-            if (playResult && typeof playResult.then === 'function') {
-              playResult
-                .then(() => {})
-                .catch(err => console.error('❌ Remote video play failed:', err.message));
-            }
-          } catch (e) { 
-            console.error('❌ Error attaching remote stream:', e.message); 
-          }
-        }
       } else if (event.track) {
         const s = new MediaStream([event.track]);
-        
         setRemoteStream(s);
-        
-        if (remoteVideoRef.current) {
-          try {
-            remoteVideoRef.current.muted = !!remoteMutedRef.current;
-            remoteVideoRef.current.srcObject = s;
-            const playResult = remoteVideoRef.current.play();
-            if (playResult && typeof playResult.then === 'function') {
-              playResult
-                .then(() => {})
-                .catch(err => console.error('❌ Remote video play failed:', err.message));
-            }
-          } catch (e) { 
-            console.error('❌ Error attaching single track:', e.message); 
-          }
-        }
       }
     };
 
@@ -354,7 +580,6 @@ function SessionPageContent() {
         setIsConnecting(false);
         isNegotiatingRef.current = false;
       } else if (pc.connectionState === 'failed') {
-        console.error('❌ Peer connection failed');
         setIsConnecting(false);
         isNegotiatingRef.current = false;
       } else if (pc.connectionState === 'disconnected') {
@@ -371,7 +596,11 @@ function SessionPageContent() {
     try {
       setIsConnecting(true);
       
-      const stream = localStream || await initializeMedia();
+      // Use activeStreamRef for most reliable current stream
+      let stream = activeStreamRef.current || localStream;
+      if (!stream) {
+        stream = await initializeMedia();
+      }
       if (!stream) {
         setIsConnecting(false);
         return;
@@ -389,7 +618,7 @@ function SessionPageContent() {
           
           pc.addTrack(track, stream);
         } catch (e) {
-          console.error(`❌ Failed to add ${track.kind} track:`, e.message);
+          // Failed to add track
         }
       });
 
@@ -406,7 +635,7 @@ function SessionPageContent() {
         } else if (socketRef.current) {
           socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
         }
-      } catch (e) { console.error('❌ Failed to send offer:', e.message); }
+      } catch (e) { /* Failed to send offer */ }
     } catch (error) {
       console.error('Error starting call:', error);
       setIsConnecting(false);
@@ -426,7 +655,11 @@ function SessionPageContent() {
       
       setIsConnecting(true);
       
-      const stream = localStream || await initializeMedia();
+      // Use activeStreamRef for most reliable current stream
+      let stream = activeStreamRef.current || localStream;
+      if (!stream) {
+        stream = await initializeMedia();
+      }
       if (!stream) {
         setIsConnecting(false);
         return;
@@ -446,7 +679,7 @@ function SessionPageContent() {
           
           pc.addTrack(track, stream);
         } catch (e) {
-          console.error(`❌ Failed to add ${track.kind} track:`, e.message);
+          // Failed to add track
         }
       });
 
@@ -461,7 +694,7 @@ function SessionPageContent() {
         } else if (socketRef.current) {
           socketRef.current.emit('webrtc-answer', { link, answer: pc.localDescription });
         }
-      } catch (e) { console.error('❌ Failed to send answer:', e.message); }
+      } catch (e) { /* Failed to send answer */ }
 
       // Process queued ICE candidates
       while (iceCandidatesQueue.current.length > 0) {
@@ -469,7 +702,7 @@ function SessionPageContent() {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
-          console.error('Error adding queued ICE candidate:', e);
+          // Error adding queued ICE candidate
         }
       }
     } catch (error) {
@@ -506,7 +739,7 @@ function SessionPageContent() {
           const t = r && r.track;
         });
       } catch (e) {
-        console.warn('Could not inspect receivers:', e && e.message);
+        // Could not inspect receivers
       }
 
       // Process queued ICE candidates
@@ -515,7 +748,7 @@ function SessionPageContent() {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
-          console.error('Error adding queued ICE candidate:', e);
+          // Error adding queued ICE candidate
         }
       }
       
@@ -551,104 +784,110 @@ function SessionPageContent() {
     const pc = peerConnectionRef.current;
 
     if (cameraEnabled) {
-      // Turn camera OFF - disable video track but keep it in the stream
-      try {
-        if (localStream) {
-          const videoTrack = localStream.getVideoTracks()[0];
-          if (videoTrack) {
-            try { videoTrack.enabled = false; } catch (e) {}
-            setCameraEnabled(false);
+      // Turn camera OFF - Stop ALL tracks from BOTH state AND ref to handle async race conditions
+      
+      // 1. Collect ALL video tracks from both sources (handles state/ref sync issues)
+      const allVideoTracks = [
+        ...(localStream ? localStream.getVideoTracks() : []),
+        ...(activeStreamRef.current ? activeStreamRef.current.getVideoTracks() : [])
+      ];
+      
+      // Remove duplicates by track ID
+      const uniqueTracks = Array.from(
+        new Map(allVideoTracks.map(track => [track.id, track])).values()
+      );
+      
+      // 2. Stop ALL tracks immediately (Hardware Level Release)
+      uniqueTracks.forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
 
-            if (pc) {
-              try {
-                const senders = pc.getSenders ? pc.getSenders() : [];
-                for (const sender of senders) {
-                  if (sender && sender.track && sender.track.kind === 'video') {
-                    try { sender.track.enabled = false; } catch (e) {}
-                  }
-                }
-              } catch (e) {}
-            }
-          }
-        }
-      } catch (err) {
-        console.error('❌ Error turning camera off:', err.message);
+      // 3. Clear ALL video DOM element references (DOM Level Release)
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
       }
-    } else {
-      // Turn camera ON - enable existing track or acquire new one
-      try {
-        // First, try to re-enable existing video track
-        if (localStream) {
-          const existingVideoTrack = localStream.getVideoTracks()[0];
-          if (existingVideoTrack && existingVideoTrack.readyState === 'live') {
-            try { existingVideoTrack.enabled = true; } catch (e) {}
-            setCameraEnabled(true);
 
-            // Re-enable in peer connection
-            if (pc) {
-              const senders = pc.getSenders ? pc.getSenders() : [];
-              for (const sender of senders) {
-                if (sender && sender.track && sender.track.kind === 'video') {
-                  try { sender.track.enabled = true; } catch (e) {}
-                }
-              }
-            }
-            return;
-          }
+      // 4. Create black stream for both local UI and remote peer
+      const currentStream = activeStreamRef.current || localStream;
+      const audioTracks = currentStream ? currentStream.getAudioTracks() : [];
+      const blackStream = createBlackVideoStream();
+      const blackVideoTrack = blackStream.getVideoTracks()[0];
+      const newStream = new MediaStream([...audioTracks, blackVideoTrack]);
+
+      // 5. Send black video to remote peer so they see black screen
+      if (pc && blackVideoTrack) {
+        const senders = pc.getSenders();
+        const vSender = senders.find(s => s.track?.kind === 'video');
+        if (vSender) {
+          await vSender.replaceTrack(blackVideoTrack);
         }
+      }
 
-        // If no existing track or track is stopped, acquire new camera
-        const videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      // 6. Update both ref and state with new stream (keeps audio active)
+      activeStreamRef.current = newStream;
+      setLocalStream(newStream);
+      setCameraEnabled(false);
+    } else {
+      // Turn camera ON - acquire new video track and replace in peer connection
+      try {
+        // Acquire fresh camera stream with quality constraints
+        const videoStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } }, 
+          audio: false 
+        });
         const newVideoTrack = videoStream.getVideoTracks()[0];
 
         if (!newVideoTrack) {
-          throw new Error('No video track obtained');
+          throw new Error('No video track obtained from camera');
         }
 
-        // Ensure we have a localStream object
-        let currentStream = localStream;
-        if (!currentStream) {
-          currentStream = new MediaStream();
-          setLocalStream(currentStream);
-        }
+        // Enable the track immediately
+        newVideoTrack.enabled = true;
 
-        // Remove old video tracks and add new one
-        try {
-          currentStream.getVideoTracks().forEach(track => {
-            try { currentStream.removeTrack(track); } catch (e) {}
-            try { track.stop(); } catch (e) {}
+        // Create NEW stream (don't mutate existing) to ensure clean state
+        const currentStream = activeStreamRef.current || localStream;
+        if (currentStream) {
+          // Stop and remove old black video track
+          const oldVideoTracks = currentStream.getVideoTracks();
+          oldVideoTracks.forEach(track => {
+            track.stop();
           });
-        } catch (e) {}
-        currentStream.addTrack(newVideoTrack);
-        setLocalStream(currentStream);
-
-        // Update video element
-        if (localVideoRef.current) {
-          try { localVideoRef.current.srcObject = currentStream; } catch (e) { console.warn(e); }
+          
+          // Create completely NEW stream with audio + real video
+          const audioTracks = currentStream.getAudioTracks();
+          const newStream = new MediaStream([...audioTracks, newVideoTrack]);
+          
+          // Update BOTH ref and state - CRITICAL!
+          activeStreamRef.current = newStream;
+          setLocalStream(newStream);
+        } else {
+          // No existing stream, create new one with just video
+          const newStream = new MediaStream([newVideoTrack]);
+          activeStreamRef.current = newStream;
+          setLocalStream(newStream);
         }
 
-        // Attach to peer connection
+        // Replace track in peer connection (no renegotiation needed with replaceTrack)
         if (pc) {
           const senders = pc.getSenders ? pc.getSenders() : [];
-          const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-
-          let renegotiationNeeded = false;
+          // Find video sender by checking track kind or by checking the transceiver media type
+          const videoSender = senders.find(s => {
+            if (s.track && s.track.kind === 'video') return true;
+            // Check transceiver to see if this sender is for video (even if track is null)
+            const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+            const transceiver = transceivers.find(t => t.sender === s);
+            return transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === 'video';
+          });
 
           if (videoSender && typeof videoSender.replaceTrack === 'function') {
-            try {
-              await videoSender.replaceTrack(newVideoTrack);
-            } catch (e) {
-              try { pc.addTrack(newVideoTrack, currentStream); } catch (err) {}
-              renegotiationNeeded = true;
-            }
+            // replaceTrack doesn't require renegotiation
+            await videoSender.replaceTrack(newVideoTrack);
           } else {
-            try { pc.addTrack(newVideoTrack, currentStream); } catch (err) {}
-            renegotiationNeeded = true;
-          }
-
-          // Renegotiate if we added a new track
-          if (renegotiationNeeded && !isNegotiatingRef.current) {
-            try {
+            // Fallback: add track if no sender exists (requires renegotiation)
+            pc.addTrack(newVideoTrack, localStream);
+            
+            if (!isNegotiatingRef.current) {
               isNegotiatingRef.current = true;
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
@@ -658,9 +897,6 @@ function SessionPageContent() {
               } else if (socketRef.current) {
                 socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
               }
-            } catch (e) {
-            } finally {
-              isNegotiatingRef.current = false;
             }
           }
         }
@@ -678,93 +914,85 @@ function SessionPageContent() {
     const pc = peerConnectionRef.current;
     
     if (micEnabled) {
-      // Turn mic OFF - just disable the audio track
+      // Turn mic OFF - stop audio track and replace with null in peer connection
       try {
-        if (localStream) {
-          const audioTrack = localStream.getAudioTracks()[0];
-          if (audioTrack) {
-            try { audioTrack.enabled = false; } catch (e) {}
+        const currentStream = activeStreamRef.current || localStream;
+        if (currentStream) {
+          // Stop ALL audio tracks to fully release microphone hardware
+          const audioTracks = currentStream.getAudioTracks();
+          audioTracks.forEach(track => {
+            track.stop(); // This releases the hardware
+            track.enabled = false;
+          });
+            
+            // Replace with null in peer connection to stop sending audio
+            if (pc) {
+              const senders = pc.getSenders ? pc.getSenders() : [];
+              const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+              if (audioSender && typeof audioSender.replaceTrack === 'function') {
+                await audioSender.replaceTrack(null);
+              }
+            }
+            
+            // Create new stream without audio for consistency
+            const videoTracks = currentStream.getVideoTracks();
+            const newStream = new MediaStream([...videoTracks]);
+            activeStreamRef.current = newStream;
+            setLocalStream(newStream);
             setMicEnabled(false);
-          }
         }
       } catch (e) {
-        console.error('❌ Error muting mic:', e.message);
+        console.error('Error muting mic:', e);
       }
     } else {
-      // Turn mic ON - enable existing track or acquire new one
+      // Turn mic ON - acquire new audio track and replace in peer connection
       try {
-        // Try to re-enable existing audio track
-        if (localStream) {
-          const existingAudioTrack = localStream.getAudioTracks()[0];
-          if (existingAudioTrack && existingAudioTrack.readyState === 'live') {
-            try { existingAudioTrack.enabled = true; } catch (e) {}
-            setMicEnabled(true);
-            return;
-          }
-        }
-
-        // If no existing track, acquire new microphone
+        // Acquire fresh microphone stream
         const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         const newAudioTrack = audioStream.getAudioTracks()[0];
 
         if (!newAudioTrack) {
-          throw new Error('No audio track obtained');
+          throw new Error('No audio track obtained from microphone');
         }
 
-        // Ensure we have a MediaStream
-        let currentStream = localStream;
-        if (!currentStream) {
-          currentStream = new MediaStream();
-          setLocalStream(currentStream);
-        }
+        // Create new stream with audio + existing video tracks
+        const currentStream = activeStreamRef.current || localStream;
+        const videoTracks = currentStream ? currentStream.getVideoTracks() : [];
+        const newStream = new MediaStream([...videoTracks, newAudioTrack]);
+        
+        // Update both ref and state
+        activeStreamRef.current = newStream;
+        setLocalStream(newStream);
 
-        // Remove old audio tracks and add new one
-        try {
-          currentStream.getAudioTracks().forEach(track => {
-            try { currentStream.removeTrack(track); } catch (e) {}
-            try { track.stop(); } catch (e) {}
-          });
-        } catch (e) {}
-        currentStream.addTrack(newAudioTrack);
-        setLocalStream(currentStream);
-
-        // Attach to peer connection
+        // Replace track in peer connection (no renegotiation needed with replaceTrack)
         if (pc) {
           const senders = pc.getSenders ? pc.getSenders() : [];
-          const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-
-          let renegotiationNeeded = false;
+          // Find audio sender by checking track kind or by checking the transceiver media type
+          const audioSender = senders.find(s => {
+            if (s.track && s.track.kind === 'audio') return true;
+            // Check transceiver to see if this sender is for audio (even if track is null)
+            const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+            const transceiver = transceivers.find(t => t.sender === s);
+            return transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === 'audio';
+          });
 
           if (audioSender && typeof audioSender.replaceTrack === 'function') {
-            try {
-              await audioSender.replaceTrack(newAudioTrack);
-            } catch (e) {
-              console.warn('replaceTrack failed for audio, adding new track:', e);
-              try { pc.addTrack(newAudioTrack, currentStream); } catch (err) { console.warn('addTrack failed', err); }
-              renegotiationNeeded = true;
-            }
+            // replaceTrack doesn't require renegotiation
+            await audioSender.replaceTrack(newAudioTrack);
           } else {
-            try { pc.addTrack(newAudioTrack, currentStream); } catch (err) { console.warn('addTrack failed', err); }
-            renegotiationNeeded = true;
-          }
+            // Fallback: add track if no sender exists (requires renegotiation)
+            pc.addTrack(newAudioTrack, localStream || new MediaStream([newAudioTrack]));
 
-          // Renegotiate if needed
-          if (renegotiationNeeded && !isNegotiatingRef.current) {
-            try {
+            if (!isNegotiatingRef.current) {
               isNegotiatingRef.current = true;
               const offer = await pc.createOffer();
               await pc.setLocalDescription(offer);
-
               const room = (session && (session.link || session.id)) || link;
               if (signalSocketRef.current && signalSocketRef.current.connected) {
                 signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
               } else if (socketRef.current) {
                 socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
               }
-            } catch (e) {
-              console.warn('Failed to renegotiate after adding audio track', e);
-            } finally {
-              isNegotiatingRef.current = false;
             }
           }
         }
@@ -773,15 +1001,35 @@ function SessionPageContent() {
 
       } catch (e) {
         console.error('Error enabling mic:', e);
-        alert('Failed to access microphone: ' + (e && e.message));
+        alert('Failed to access microphone. Please check permissions.');
       }
     }
   };
 
   const cleanupWebRTC = () => {
-    // Stop all tracks
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+    // Stop ALL tracks from BOTH state AND ref to handle any zombie streams
+    const allTracks = [
+      ...(localStream ? localStream.getTracks() : []),
+      ...(activeStreamRef.current ? activeStreamRef.current.getTracks() : [])
+    ];
+    
+    // Remove duplicates by track ID
+    const uniqueTracks = Array.from(
+      new Map(allTracks.map(track => [track.id, track])).values()
+    );
+    
+    // Stop all unique tracks
+    uniqueTracks.forEach(track => {
+      track.stop(); // Stop hardware
+      track.enabled = false;
+    });
+    
+    // Clear ALL video element references
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
     }
     
     // Close peer connection
@@ -790,6 +1038,8 @@ function SessionPageContent() {
       peerConnectionRef.current = null;
     }
     
+    // Clear all stream references
+    activeStreamRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
   };
@@ -918,7 +1168,7 @@ function SessionPageContent() {
       const signal = io(BASE + '/signal');
       signalSocketRef.current = signal;
     } catch (e) {
-      console.warn('Failed to connect to signaling namespace', e);
+      // Failed to connect to signaling namespace
     }
 
     socket.on('connect', () => {
@@ -927,7 +1177,25 @@ function SessionPageContent() {
 
     socket.on('session-joined', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
-      setSession(sessionData || null);
+      try {
+        const serialized = JSON.stringify(sessionData || {});
+        if (sessionJsonRef.current !== serialized) {
+          sessionJsonRef.current = serialized;
+          setSession(sessionData || null);
+        }
+      } catch (e) {
+        setSession(sessionData || null);
+      }
+      
+      // When session is joined, ensure current user is not in participantsLeft
+      const localIsMentor = isMentorRef.current;
+      const currentRole = localIsMentor ? 'mentor' : 'student';
+      setParticipantsLeft((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(currentRole);
+        return newSet;
+      });
+      
       // Join signaling room for video calls when session data is available
       try {
         const room = (sessionData && (sessionData.link || sessionData.id)) || link;
@@ -970,7 +1238,12 @@ function SessionPageContent() {
       
       // refresh participants list when session data arrives
       try {
-        setParticipants(buildParticipants(sessionData));
+        const built = buildParticipants(sessionData);
+        const pSerialized = JSON.stringify(built || []);
+        if (participantsJsonRef.current !== pSerialized) {
+          participantsJsonRef.current = pSerialized;
+          setParticipants(built);
+        }
       } catch (e) {}
       // update active state/timer
       try {
@@ -980,24 +1253,37 @@ function SessionPageContent() {
 
     socket.on('session-update', (updated) => {
       const sessionData = Array.isArray(updated) ? updated[0] : updated;
+      
+      // Always update session state to ensure UI reflects latest data
+      sessionJsonRef.current = JSON.stringify(sessionData || {});
       setSession(sessionData || null);
-      // refresh participants list when session updates
-      try {
-        const built = buildParticipants(sessionData);
-        setParticipants(built);
 
-        // Apply any explicit presence overrides we've received from sockets
-        // If mentor/student left, remove them from the list (don't just mark inactive)
-        try {
-          const pres = presenceRef.current || { mentorPresent: null, studentPresent: null };
-          if (pres.mentorPresent === false) {
-            setParticipants((prev) => prev.filter((p) => p.role !== 'mentor'));
-          }
-          if (pres.studentPresent === false) {
-            setParticipants((prev) => prev.filter((p) => p.role !== 'student'));
-          }
-        } catch (e) {}
+      // Check if student has rejoined and remove them from participantsLeft
+      if (sessionData?.student_name) {
+        setParticipantsLeft((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete('student');
+          return newSet;
+        });
+      }
+
+      // refresh participants list when session updates
+      const built = buildParticipants(sessionData);
+      participantsJsonRef.current = JSON.stringify(built || []);
+      setParticipants(built);
+
+      // Apply any explicit presence overrides we've received from sockets
+      // If mentor/student left, remove them from the list (don't just mark inactive)
+      try {
+        const pres = presenceRef.current || { mentorPresent: null, studentPresent: null };
+        if (pres.mentorPresent === false) {
+          setParticipants((prev) => prev.filter((p) => p.role !== 'mentor'));
+        }
+        if (pres.studentPresent === false) {
+          setParticipants((prev) => prev.filter((p) => p.role !== 'student'));
+        }
       } catch (e) {}
+      
       // update active state/timer
       try {
         updateSessionState(sessionData);
@@ -1013,6 +1299,13 @@ function SessionPageContent() {
 
         // Track that this role has left so we can hide them in the UI
         setParticipantsLeft((prev) => new Set(prev).add(role));
+        
+        // Clean up WebRTC connection when participant leaves so we can reconnect when they rejoin
+        try {
+          cleanupWebRTC();
+        } catch (e) {
+          console.error('Error cleaning up WebRTC on participant leave:', e);
+        }
       } catch (e) {}
     });
 
@@ -1034,11 +1327,47 @@ function SessionPageContent() {
           const json = await resp.json().catch(() => null);
           const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
           if (sessionData) {
-            setSession(sessionData);
+            try {
+              const serialized = JSON.stringify(sessionData || {});
+              if (sessionJsonRef.current !== serialized) {
+                sessionJsonRef.current = serialized;
+                setSession(sessionData);
+              }
+            } catch (e) {
+              setSession(sessionData);
+            }
+            
+            // Rebuild participants list to ensure rejoined mentor is displayed
+            try {
+              const built = buildParticipants(sessionData);
+              const pSerialized = JSON.stringify(built || []);
+              if (participantsJsonRef.current !== pSerialized) {
+                participantsJsonRef.current = pSerialized;
+                setParticipants(built);
+              }
+            } catch (e) {}
+            
             try { updateSessionState(sessionData); } catch (e) {}
           }
         } catch (e) {
           // ignore fetch errors
+        }
+
+        // If current user is student and mentor rejoined, initiate WebRTC connection
+        const currentRole = sessionStorage.getItem('userRole');
+        if (currentRole === 'student') {
+          // Clean up any existing connection first
+          cleanupWebRTC();
+          
+          // Wait a bit for mentor's socket listeners to be ready
+          await new Promise(res => setTimeout(res, 500));
+          
+          // Initiate new WebRTC connection to the rejoined mentor
+          try {
+            await startCall();
+          } catch (e) {
+            console.error('Failed to initiate call to rejoined mentor:', e);
+          }
         }
       } catch (e) {}
     });
@@ -1057,13 +1386,48 @@ function SessionPageContent() {
           return newSet;
         });
 
+        // If this is a student rejoining and current user is mentor, initiate WebRTC connection
+        const localIsMentor = isMentorRef.current;
+        if (localIsMentor && role === 'student') {
+          try {
+            // Clean up any existing connection first
+            cleanupWebRTC();
+            
+            // Ensure media is ready
+            if (!activeStreamRef.current) {
+              await initializeMedia();
+            }
+            
+            // Give the student a moment to set up their socket listeners
+            setTimeout(() => {
+              try {
+                startCall();
+              } catch (e) {
+                console.error('Error starting call after participant joined:', e);
+              }
+            }, 500);
+          } catch (e) {
+            console.error('Error handling participant rejoin:', e);
+          }
+        }
+
         // Fetch latest session data to refresh UI (participant name may be present there)
         try {
           const resp = await fetch(`${BASE}/session?link=${encodeURIComponent(link)}`);
           const json = await resp.json().catch(() => null);
           const sessionData = json && json.status === 'success' ? (Array.isArray(json.data) ? json.data[0] : json.data) : null;
           if (sessionData) {
+            // Always update session state when participant joins to ensure student name is displayed
+            sessionJsonRef.current = JSON.stringify(sessionData || {});
             setSession(sessionData);
+            
+            // Rebuild participants list to ensure rejoined student is displayed
+            try {
+              const built = buildParticipants(sessionData);
+              participantsJsonRef.current = JSON.stringify(built || []);
+              setParticipants(built);
+            } catch (e) {}
+            
             try { updateSessionState(sessionData); } catch (e) {}
           }
         } catch (e) {
@@ -1072,8 +1436,8 @@ function SessionPageContent() {
       } catch (e) {}
     });
 
-    // listen for remote cursor positions
-    socket.on('cursor-position', (payload) => {
+    // listen for remote cursor positions (support both 'cursor-position' and 'cursor-change' events)
+  socket.on('cursor-position', (payload) => {
       try {
         if (!payload || payload.link !== link) return;
         const sid = payload.senderId;
@@ -1098,6 +1462,43 @@ function SessionPageContent() {
         const className = `remote-caret-${colorIndex}`;
 
         // prepare decoration
+        if (editorRef.current && monacoRef.current) {
+          const monaco = monacoRef.current;
+          const range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
+          const newDecor = [{ range, options: { afterContentClassName: className, stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowWhenTypingAtEdges } }];
+
+          const prev = remoteCursorsRef.current[sid]?.decorationIds || [];
+          try {
+            const newIds = editorRef.current.deltaDecorations(prev, newDecor);
+            remoteCursorsRef.current[sid] = { decorationIds: newIds, colorIndex };
+          } catch (e) {
+            // ignore errors from deltaDecorations
+          }
+        }
+      } catch (e) {}
+    });
+
+    // Also accept server-relayed 'cursor-change' events for compatibility with backend
+    socket.on('cursor-change', (payload) => {
+      try {
+        if (!payload || payload.link !== link) return;
+        const sid = payload.senderId;
+        if (!sid) return;
+        if (socketRef.current && socketRef.current.id === sid) return;
+
+        const pos = payload.position;
+        if (!pos || !pos.lineNumber) return;
+
+        const pickIndex = (id) => {
+          const colors = [0,1,2,3,4,5];
+          let h = 0;
+          for (let i = 0; i < id.length; i++) h = (h << 5) - h + id.charCodeAt(i);
+          return Math.abs(h) % colors.length;
+        };
+
+        const colorIndex = remoteCursorsRef.current[sid]?.colorIndex ?? pickIndex(String(sid));
+        const className = `remote-caret-${colorIndex}`;
+
         if (editorRef.current && monacoRef.current) {
           const monaco = monacoRef.current;
           const range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
@@ -1139,6 +1540,12 @@ function SessionPageContent() {
           type: msg.type || 'text',
           created_at: msg.created_at || new Date().toISOString(),
         };
+        // Ignore system messages (join/leave) so they are not shown in chat
+        if (normalized.type === 'system' || String(normalized.user).toLowerCase() === 'system') return;
+        // Also ignore common join/leave content patterns
+        const lc = String(normalized.content || '').toLowerCase();
+        if (lc.includes(' joined the session') || lc.includes(' left the session') || lc.includes('joined the chat') || lc.includes('left the chat')) return;
+
         setMessages((prev) => [...prev, normalized]);
       } catch (e) {}
     });
@@ -1201,8 +1608,8 @@ function SessionPageContent() {
       s.on('answer', handleWebRTCAnswer);
       s.on('ice-candidate', handleICECandidate);
       
-      // When another participant joins, mentor should initiate the call
-      s.on('participant-ready', (payload) => {
+      // When another participant joins, mentor should initiate the call immediately
+      s.on('participant-ready', async (payload) => {
         
         try {
           const localIsMentor = isMentorRef.current;
@@ -1210,10 +1617,14 @@ function SessionPageContent() {
           const isNeg = isNegotiatingRef.current;
 
           if (localIsMentor && !pc && !isNeg) {
-            setTimeout(() => startCall(), 500);
+            // Ensure media is ready before starting call - use activeStreamRef for consistency
+            if (!activeStreamRef.current) {
+              await initializeMedia();
+            }
+            startCall();
           }
         } catch (e) {
-          console.error('❌ Error in participant-ready:', e.message);
+          // Error in participant-ready
         }
       });
     }
@@ -1288,7 +1699,7 @@ function SessionPageContent() {
           setError((data && data.message) || 'Session not found');
         }
       })
-      .catch(() => setError('Failed to load session'));
+      .catch((err) => setError(err?.message || 'Network error. Please check your connection and try again.'));
 
     return () => {
       try {
@@ -1301,16 +1712,45 @@ function SessionPageContent() {
     };
   }, [link]);
 
-  // Initialize WebRTC when session is loaded
+  // Initialize WebRTC media eagerly when session is loaded
   useEffect(() => {
-    if (session && link && !localStream) {
-      initializeMedia();
+    const setupMedia = async () => {
+      // Initialize media if we don't have an active stream
+      if (!activeStreamRef.current) {
+        try {
+          await initializeMedia();
+        } catch (err) {
+          console.error('Failed to initialize media:', err);
+          return;
+        }
+      }
+
+      // After media is ready (or already available), signal to other participants
+      const localIsMentor = isMentorRef.current;
+      const room = (session && (session.link || session.id)) || link;
+      
+      if (signalSocketRef.current && signalSocketRef.current.connected && room) {
+        // Emit participant-ready so other side knows to initiate/accept connections
+        signalSocketRef.current.emit('participant-ready', { room, role: localIsMentor ? 'mentor' : 'student' });
+      }
+    };
+
+    if (session && link) {
+      setupMedia();
     }
 
     return () => {
-      // Cleanup on unmount
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+      // Cleanup on unmount - use activeStreamRef for reliable cleanup
+      const currentStream = activeStreamRef.current;
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => {
+          track.enabled = false;
+          track.stop();
+        });
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
+        activeStreamRef.current = null;
       }
     };
   }, [session, link]);
@@ -1318,72 +1758,55 @@ function SessionPageContent() {
   // Update video elements when streams change
   useEffect(() => {
     if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+      const video = localVideoRef.current;
+      video.srcObject = localStream;
+      // Use onloadedmetadata to avoid AbortError
+      video.onloadedmetadata = () => {
+        video.play().catch(e => console.log('Local video play failed:', e));
+      };
     }
   }, [localStream]);
 
+  // Combined useEffect for remoteStream to prevent flickering and AbortError
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
+    if (remoteVideoRef.current) {
+      const video = remoteVideoRef.current;
       
-      // Diagnostic: check track states
-      const tracks = remoteStream.getTracks();
-      
-      try {
-        // Ensure muted state is applied before attempting autoplay to satisfy browser policies
-        // Temporarily force unmuted to test if muting is causing issues
-        remoteVideoRef.current.muted = false;
-        remoteVideoRef.current.srcObject = remoteStream;
+      if (remoteStream) {
+        // Diagnostic: check track states
+        const tracks = remoteStream.getTracks();
         
-        
-        const attemptPlay = () => {
-          const playResult = remoteVideoRef.current.play();
-          if (playResult && typeof playResult.then === 'function') {
-            playResult
-              .then(() => {})
-              .catch(err => {
-                console.error('❌ Remote video play failed (from useEffect):', err.message);
-                // Retry after a short delay if autoplay was blocked
-                if (err.name === 'NotAllowedError') {
-                  
-                }
-              });
-          } else {
-            
+        // Add event listeners to tracks for when they end (camera/mic turned off)
+        tracks.forEach(track => {
+          if (track.kind === 'video') {
+            track.onended = () => {
+              // When remote video track ends, show black screen instead of frozen frame
+              if (remoteVideoRef.current) {
+                const blackStream = createBlackVideoStream();
+                remoteVideoRef.current.srcObject = blackStream;
+                remoteVideoRef.current.play().catch(err => console.error('Error playing black stream:', err));
+              }
+            };
           }
-        };
+        });
         
-        // If readyState is low, wait for loadedmetadata with timeout
-        if (remoteVideoRef.current.readyState < 2) {
+        try {
+          // Apply muted state and set stream
+          video.muted = remoteMuted;
+          video.srcObject = remoteStream;
           
-          let handled = false;
-          
-          const metadataHandler = () => {
-            if (handled) return;
-            handled = true;
-            attemptPlay();
-          };
-          
-          remoteVideoRef.current.addEventListener('loadedmetadata', metadataHandler, { once: true });
-          
-          // Fallback: if metadata doesn't load in 2 seconds, try play anyway
-          setTimeout(() => {
-            if (!handled) {
-              handled = true;
-              remoteVideoRef.current.removeEventListener('loadedmetadata', metadataHandler);
-              attemptPlay();
-            }
-          }, 2000);
-          
-          // Force load
-          try {
-            remoteVideoRef.current.load();
-          } catch (e) {
-          }
-        } else {
-          attemptPlay();
+          // Play immediately without waiting for metadata
+          video.play().catch(err => {
+            console.error('❌ Remote video play failed:', err.message);
+          });
+        } catch (e) {
+          console.error('❌ Error in remoteStream useEffect:', e.message);
         }
-      } catch (e) {
-        console.error('❌ Error in remoteStream useEffect:', e.message);
+      } else {
+        // No remote stream - show black canvas instead of frozen frame
+        const blackStream = createBlackVideoStream();
+        video.srcObject = blackStream;
+        video.play().catch(err => console.error('Error playing black stream:', err));
       }
     }
   }, [remoteStream, remoteMuted]);
@@ -1435,9 +1858,15 @@ function SessionPageContent() {
             try { editorRef.current.deltaDecorations(prev, []); } catch (e) {}
           });
         }
-        // dispose selection listener
-        if (selectionListenerRef.current && typeof selectionListenerRef.current.dispose === 'function') {
-          try { selectionListenerRef.current.dispose(); } catch (e) {}
+        // dispose selection listener and any content listener attached to it
+        if (selectionListenerRef.current) {
+          try {
+            if (typeof selectionListenerRef.current.dispose === 'function') selectionListenerRef.current.dispose();
+          } catch (e) {}
+          try {
+            const contentListener = selectionListenerRef.current && selectionListenerRef.current._contentListener;
+            if (contentListener && typeof contentListener.dispose === 'function') contentListener.dispose();
+          } catch (e) {}
         }
       } catch (e) {}
     };
@@ -1458,14 +1887,17 @@ function SessionPageContent() {
     // Save code to localStorage for persistence across sessions
     saveCodeToStorage(link, v);
 
-    // debounce emits to avoid flooding
+    // Emit code changes immediately for real-time collaboration
+    try {
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('code-change', { link, code: v });
+      }
+    } catch (e) {}
+
+    // Debounce database saves to avoid excessive requests
     try {
       if (emitTimeout.current) clearTimeout(emitTimeout.current);
       emitTimeout.current = setTimeout(() => {
-        if (socketRef.current && socketRef.current.connected) {
-          socketRef.current.emit('code-change', { link, code: v });
-        }
-        
         // Auto-save to database (debounced to avoid excessive saves)
         if (session && session.id) {
           fetch(`${BASE}/editor/saveCode`, {
@@ -1477,7 +1909,7 @@ function SessionPageContent() {
           });
         }
         emitTimeout.current = null;
-      }, 2000); // 2 second debounce for auto-save
+      }, 2000); // 2 second debounce for database auto-save only
     } catch (e) {}
   };
 
@@ -1486,13 +1918,16 @@ function SessionPageContent() {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
-    // Define our custom theme
-    monaco.editor.defineTheme('mentor-bridge-dark', monacoTheme);
-    monaco.editor.setTheme('mentor-bridge-dark');
+    // Define our custom themes
+    monaco.editor.defineTheme('mentor-bridge-dark', monacoThemeDark);
+    monaco.editor.defineTheme('mentor-bridge-light', monacoThemeLight);
+    
+    // Set theme based on current theme state
+    monaco.editor.setTheme(theme === 'dark' ? 'mentor-bridge-dark' : 'mentor-bridge-light');
 
     // Listen for cursor/selection changes and emit cursor position to peers
     try {
-      if (editor && typeof editor.onDidChangeCursorSelection === 'function') {
+        if (editor && typeof editor.onDidChangeCursorSelection === 'function') {
         selectionListenerRef.current = editor.onDidChangeCursorSelection((e) => {
           try {
             const pos = e.selection.getPosition();
@@ -1504,10 +1939,36 @@ function SessionPageContent() {
               position: { lineNumber: pos.lineNumber, column: pos.column },
             };
             if (socketRef.current && socketRef.current.connected) {
+              // Emit both local and server-compatible event names to ensure delivery
               socketRef.current.emit('cursor-position', payload);
+              socketRef.current.emit('cursor-change', payload);
             }
           } catch (e) {}
         });
+
+        // Also emit position while typing so others see a live typing caret
+        try {
+          const contentListener = editor.onDidChangeModelContent(() => {
+            try {
+              const now = Date.now();
+              if (now - (typingEmitRef.current || 0) < 120) return; // throttle to ~120ms
+              typingEmitRef.current = now;
+              const pos = editor.getPosition();
+              if (!pos) return;
+              const payload = {
+                link,
+                senderId: socketRef.current?.id || null,
+                name: (typeof window !== 'undefined' && window.localStorage.getItem('mentor-bridge-guest')) ? (JSON.parse(window.localStorage.getItem('mentor-bridge-guest') || '{}')?.name) : (null),
+                position: { lineNumber: pos.lineNumber, column: pos.column },
+              };
+              if (socketRef.current && socketRef.current.connected) {
+                socketRef.current.emit('cursor-change', payload);
+              }
+            } catch (e) {}
+          });
+          // store so we can dispose on unmount
+          selectionListenerRef.current._contentListener = contentListener;
+        } catch (e) {}
       }
     } catch (e) {}
   };
@@ -1709,7 +2170,7 @@ function SessionPageContent() {
 
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        alert(json?.message || 'Failed to generate new link');
+        alert(json?.message || json?.error || 'Failed to generate new link');
         setGeneratingNewLink(false);
         return;
       }
@@ -1742,30 +2203,31 @@ function SessionPageContent() {
       alert('Failed to get new link from response');
       setGeneratingNewLink(false);
     } catch (e) {
-      alert(e?.message || 'Network error');
+      alert(e?.message || 'Network error. Please check your connection and try again.');
       setGeneratingNewLink(false);
     }
   };
 
+  // Loading check - show loading state while auth is initializing
   if (loading || (!user && !guest)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200">
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="space-y-4 text-center"
         >
-          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-white/10 border-t-primary" />
-          <p className="text-sm text-slate-400">Loading session...</p>
+          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-slate-200 dark:border-white/10 border-t-primary" />
+          <p className="text-sm text-slate-600 dark:text-slate-400">Loading session...</p>
         </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* Header */}
-      <header className="border-b border-white/10 bg-slate-950/80 backdrop-blur-sm">
+      <header className="border-b border-slate-200 dark:border-white/10 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-sm">
         <div className="flex h-16 items-center justify-between px-6">
           <div className="flex items-center gap-4">
             {/* Back button removed */}
@@ -1786,22 +2248,34 @@ function SessionPageContent() {
           <div className="flex items-center gap-3">
             {/* Participants */}
             <div className="flex items-center gap-2">
-              <ChatBubbleLeftRightIcon className="h-4 w-4 text-slate-400" />
-              <span className="text-sm text-slate-300">
+              <ChatBubbleLeftRightIcon className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+              <span className="text-sm text-slate-700 dark:text-slate-300">
                 {session ? (
                   (session.mentor_name && !participantsLeft.has('mentor') ? 1 : 0) + 
-                  (session.student_name && !participantsLeft.has('student') ? 1 : 0)
+                  ((session.student_name || guest?.name) && !participantsLeft.has('student') ? 1 : 0)
                 ) : 0} participants
               </span>
             </div>
             
             {/* Action buttons */}
             <div className="flex items-center gap-2">
+              {/* Theme Toggle */}
+              <button
+                onClick={toggleTheme}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/10 p-2 transition hover:border-primary/40 hover:bg-slate-200 dark:hover:bg-primary/20"
+                title="Toggle theme"
+              >
+                {theme === 'dark' ? (
+                  <SunIcon className="h-4 w-4" />
+                ) : (
+                  <MoonIcon className="h-4 w-4" />
+                )}
+              </button>
               {/* Copy code removed */}
               {isMentor && session?.status === 'pending' && (
                 <button
                   onClick={() => setShowNewLinkModal(true)}
-                  className="rounded-full border border-yellow-500/40 bg-yellow-500/20 px-4 py-2 text-sm font-semibold text-yellow-300 transition hover:bg-yellow-500/30"
+                  className="rounded-full border border-amber-600/40 dark:border-yellow-500/40 bg-amber-100 dark:bg-yellow-500/20 px-4 py-2 text-sm font-semibold text-amber-800 dark:text-yellow-300 transition hover:bg-amber-200 dark:hover:bg-yellow-500/30"
                   title="Generate new session link"
                 >
                   Generate New Link
@@ -1809,7 +2283,7 @@ function SessionPageContent() {
               )}
               <button
                 onClick={shareSession}
-                className="rounded-full border border-white/10 bg-white/10 p-2 transition hover:border-primary/40 hover:bg-primary/20"
+                className="rounded-full border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-white/10 p-2 transition hover:border-primary/40 hover:bg-slate-200 dark:hover:bg-primary/20"
                 title="Share session"
               >
                 <ShareIcon className="h-4 w-4" />
@@ -1828,9 +2302,9 @@ function SessionPageContent() {
       {/* Generate New Link Modal */}
       {showNewLinkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Generate New Session Link</h3>
-            <p className="text-sm text-slate-400 mb-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Generate New Session Link</h3>
+            <p className="text-sm text-slate-700 dark:text-slate-400 mb-4">
               This will create a new unique link for this session. The previous link will become invalid, 
               and any students who haven't joined yet will need the new link to join.
             </p>
@@ -1841,7 +2315,7 @@ function SessionPageContent() {
               <button
                 onClick={() => setShowNewLinkModal(false)}
                 disabled={generatingNewLink}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 disabled:opacity-50"
+                className="rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-300 disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -1860,9 +2334,9 @@ function SessionPageContent() {
       {/* Share modal */}
       {showShareModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Share Session</h3>
-            <p className="text-sm text-slate-400 mb-4">Copy the join link for students to join the session.</p>
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Share Session</h3>
+            <p className="text-sm text-slate-700 dark:text-slate-400 mb-4">Copy the join link for students to join the session.</p>
 
             <div className="mb-4">
               <label className="text-xs text-slate-300">Session link</label>
@@ -1899,7 +2373,7 @@ function SessionPageContent() {
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowShareModal(false)}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                className="rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-300"
               >
                 Close
               </button>
@@ -1911,9 +2385,9 @@ function SessionPageContent() {
       {/* Leave / End Session modal for mentors */}
       {showLeaveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-950/95 p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Leave Session</h3>
-            <p className="text-sm text-slate-400 mb-4">You can either leave this session (you will be removed) or end the session for everyone. Ending the session will disconnect all participants.</p>
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-950/95 p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Leave Session</h3>
+            <p className="text-sm text-slate-700 dark:text-slate-400 mb-4">You can either leave this session (you will be removed) or end the session for everyone. Ending the session will disconnect all participants.</p>
 
             <div className="flex items-center gap-3">
               <button
@@ -1921,7 +2395,7 @@ function SessionPageContent() {
                   // Mentor chooses to leave but not end session — call public leave
                   leavePublic();
                 }}
-                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200"
+                className="rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-200"
               >
                 Leave
               </button>
@@ -1938,7 +2412,7 @@ function SessionPageContent() {
 
               <button
                 onClick={closeLeaveModal}
-                className="ml-auto rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300"
+                className="ml-auto rounded-lg border border-slate-300 dark:border-white/10 bg-slate-100 dark:bg-white/5 px-4 py-2 text-sm text-slate-700 dark:text-slate-300"
               >
                 Cancel
               </button>
@@ -1949,46 +2423,64 @@ function SessionPageContent() {
 
       <div className="flex h-[calc(100vh-4rem)]">
         {/* Participants Sidebar */}
-        <aside className="w-64 border-r border-white/10 bg-slate-950/60 p-4 flex flex-col">
+        <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-950/60 p-4 flex flex-col">
           <div className="space-y-4 flex-1 overflow-y-auto">
             <div>
-              <h3 className="text-sm font-semibold text-white">Participants</h3>
-              <p className="text-xs text-slate-400">Active in this session</p>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Participants</h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400">Active in this session</p>
             </div>
             
             <div className="space-y-2">
               {/* Render mentor if present in session and hasn't left */}
               {session && session.mentor_name && !participantsLeft.has('mentor') && (
-                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.02] p-3">
                   <div className="flex-shrink-0">
                     <div className="relative">
                       <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
                         {session.mentor_name.charAt(0).toUpperCase()}
                       </div>
-                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-100 dark:border-slate-950" />
                     </div>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{session.mentor_name}</p>
-                    <p className="text-xs text-slate-400">Mentor</p>
+                    <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{session.mentor_name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Mentor</p>
                   </div>
                 </div>
               )}
 
               {/* Render student if present in session and hasn't left */}
               {session && session.student_name && !participantsLeft.has('student') && (
-                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.02] p-3">
                   <div className="flex-shrink-0">
                     <div className="relative">
                       <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
                         {session.student_name.charAt(0).toUpperCase()}
                       </div>
-                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-950" />
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-100 dark:border-slate-950" />
                     </div>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{session.student_name}</p>
-                    <p className="text-xs text-slate-400">Student</p>
+                    <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{session.student_name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Student</p>
+                  </div>
+                </div>
+              )}
+              
+              {/* Fallback: Show guest student if session.student_name is not set but guest exists */}
+              {session && !session.student_name && guest?.name && !participantsLeft.has('student') && (
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.02] p-3">
+                  <div className="flex-shrink-0">
+                    <div className="relative">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-accent flex items-center justify-center text-xs font-semibold text-white">
+                        {guest.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-slate-100 dark:border-slate-950" />
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{guest.name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Student</p>
                   </div>
                 </div>
               )}
@@ -2000,8 +2492,8 @@ function SessionPageContent() {
                 (participantsLeft.has('mentor') && !session.student_name) ||
                 (participantsLeft.has('student') && !session.mentor_name)
               ) && (
-                <div className="rounded-lg border border-dashed border-white/20 bg-white/[0.02] p-4 text-center">
-                  <p className="text-xs text-slate-400">No participants yet</p>
+                <div className="rounded-lg border border-dashed border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-white/[0.02] p-4 text-center">
+                  <p className="text-xs text-slate-600 dark:text-slate-400">No participants yet</p>
                 </div>
               )}
             </div>
@@ -2011,10 +2503,10 @@ function SessionPageContent() {
 
             {/* Video / call box sits at bottom of the participants panel and spans full width */}
             <div className="mt-auto">
-              <div className="w-full rounded-xl border border-white/10 bg-black/60 shadow-lg">
+              <div className="w-full rounded-xl border border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-black/60 shadow-lg">
                 <div className="p-2">
                   {/* Remote video stream */}
-                  <div className="relative h-32 w-full overflow-hidden rounded-md bg-slate-900">
+                  <div className="relative h-32 w-full overflow-hidden rounded-md bg-slate-800 dark:bg-slate-900">
                     {remoteStream ? (
                       <video
                         ref={remoteVideoRef}
@@ -2024,32 +2516,14 @@ function SessionPageContent() {
                         className="h-full w-full object-cover"
                       />
                     ) : (
-                      <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">
+                      <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-300 dark:text-slate-400">
                         {isConnecting ? 'Connecting...' : 'Waiting for remote video'}
-                      </div>
-                    )}
-                    {/* Unmute toggle: allow user to enable remote audio after autoplay */}
-                    {remoteStream && (
-                      <div className="absolute top-2 right-2">
-                        <button
-                          onClick={() => {
-                            try {
-                              const next = !remoteMuted;
-                              setRemoteMuted(next);
-                              if (remoteVideoRef.current) remoteVideoRef.current.muted = next;
-                            } catch (e) {}
-                          }}
-                          className="rounded-full bg-black/60 px-2 py-1 text-xs text-slate-200 border border-white/10"
-                          title={remoteMuted ? 'Unmute remote audio' : 'Mute remote audio'}
-                        >
-                          {remoteMuted ? 'Unmute' : 'Mute'}
-                        </button>
                       </div>
                     )}
                     
                     {/* Local video (Picture-in-Picture) */}
                     {localStream && (
-                      <div className="absolute bottom-2 right-2 h-16 w-20 overflow-hidden rounded-md border border-white/20 bg-slate-900">
+                      <div className="absolute bottom-2 right-2 h-16 w-20 overflow-hidden rounded-md border border-slate-300 dark:border-white/20 bg-slate-700 dark:bg-slate-900">
                         <video
                           ref={localVideoRef}
                           autoPlay
@@ -2064,13 +2538,13 @@ function SessionPageContent() {
                   {/* Status info */}
                   <div className="mt-2 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className={`h-2 w-2 rounded-full ${remoteStream ? 'bg-green-500' : 'bg-slate-600'}`} />
-                      <div className="text-xs text-slate-400">
+                      <div className={`h-2 w-2 rounded-full ${remoteStream ? 'bg-green-500' : 'bg-slate-400 dark:bg-slate-600'}`} />
+                      <div className="text-xs text-slate-600 dark:text-slate-400">
                         {remoteStream ? 'Connected' : isConnecting ? 'Connecting...' : 'Not connected'}
                       </div>
                     </div>
                     {localStream && (
-                      <div className="flex items-center gap-1 text-xs text-slate-400">
+                      <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
                         <div className={`h-2 w-2 rounded-full ${cameraEnabled ? 'bg-green-500' : 'bg-red-500'}`} />
                         <div className={`h-2 w-2 rounded-full ${micEnabled ? 'bg-green-500' : 'bg-red-500'}`} />
                       </div>
@@ -2120,7 +2594,7 @@ function SessionPageContent() {
                 value={code}
                 onChange={handleEditorChange}
                 onMount={handleEditorDidMount}
-                theme="mentor-bridge-dark"
+                theme={theme === 'dark' ? 'mentor-bridge-dark' : 'mentor-bridge-light'}
                 options={{
                   fontSize: 14,
                   fontFamily: 'Fira Code, Monaco, Consolas, monospace',
@@ -2144,12 +2618,12 @@ function SessionPageContent() {
             </div>
 
             {/* Output Panel (moved below the editor) */}
-            <div className="border-t border-white/10 bg-slate-950/60 h-48">
-              <div className="border-b border-white/10 bg-slate-950/40 p-3">
-                <h3 className="text-sm font-semibold text-white">Output</h3>
+            <div className="border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-950/60 h-48">
+              <div className="border-b border-slate-200 dark:border-white/10 bg-slate-100 dark:bg-slate-950/40 p-3">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Output</h3>
               </div>
               <div className="h-full overflow-y-auto p-4">
-                <pre className="text-sm text-slate-300 whitespace-pre-wrap font-mono">
+                <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono">
                   {output || 'Click "Run Code" to see output...'}
                 </pre>
               </div>
@@ -2157,89 +2631,22 @@ function SessionPageContent() {
           </div>
         </main>
 
-        {/* Right-side chat panel */}
-        <aside
-          className="w-80 border-l border-white/10 bg-slate-950/60 p-4 flex flex-col"
-          onClick={() => { try { if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
-        >
-          <div className="mb-3">
-            <h3 className="text-sm font-semibold text-white">Chat</h3>
-            <p className="text-xs text-slate-400">Session chat</p>
-          </div>
-
-          <div className="flex-1 overflow-y-auto rounded-lg border border-white/6 bg-slate-900/40 p-3">
-            {/* messages list */}
-            <div className="flex flex-col gap-3">
-              {messages.length === 0 ? (
-                <div className="text-xs text-slate-400">No messages yet</div>
-              ) : (
-                messages.map((m) => (
-                  <div key={m.id} className="text-sm">
-                    <div className="text-xs text-slate-400">{m.user}</div>
-                    <div className="mt-1 rounded-md bg-slate-800/60 px-3 py-2 text-slate-100">{m.content}</div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="flex items-center gap-2" onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}>
-              <input
-                type="text"
-                placeholder="Type a message..."
-                value={chatInput}
-                ref={chatInputRef}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    const text = chatInput && chatInput.trim();
-                    if (!text) return;
-                    const sessionId = session?.id || link;
-                    const canonicalRoom = session?.link || session?.id || link;
-                    const studentName = chatStudentNameRef.current || session?.student_name || link;
-                    const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
-                    const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
-                    try {
-                      // optimistic append
-                      setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
-                      if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
-                    } catch (e) {}
-                    setChatInput('');
-                  }
-                }}
-                onMouseDown={(e) => { try { e.stopPropagation(); if (chatInputRef.current) chatInputRef.current.focus(); } catch (e) {} }}
-                onFocus={(e) => { try { e.stopPropagation(); } catch (e) {} }}
-                autoFocus={false}
-                tabIndex={0}
-                style={{ zIndex: 50, position: 'relative', pointerEvents: 'auto' }}
-                className="flex-1 rounded-lg bg-slate-900/60 border border-white/10 px-3 py-2 text-sm text-slate-100"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const text = chatInput && chatInput.trim();
-                  if (!text) return;
-                  const sessionId = session?.id || link;
-                  const canonicalRoom = session?.link || session?.id || link;
-                  const studentName = chatStudentNameRef.current || session?.student_name || link;
-                  const userName = (user && (user.name || user.email)) || (guest && guest.name) || 'participant';
-                  const payload = { sessionId, studentName, user: userName, content: text, type: 'text', link: session?.link || link, room: canonicalRoom };
-                  try {
-                    setMessages((prev) => [...prev, { id: `local-${Date.now()}`, user: userName, content: text, type: 'text', created_at: new Date().toISOString() }]);
-                    if (socketRef.current && socketRef.current.connected) socketRef.current.emit('sendMessage', payload);
-                  } catch (e) {}
-                  setChatInput('');
-                }}
-                className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white"
-                style={{ pointerEvents: 'auto', zIndex: 60 }}
-              >
-                Send
-              </button>
-            </div>
-          </div>
-        </aside>
+        {/* Render chat via portal to avoid stacking/context click-blocking issues */}
+        <ChatPortal
+          chatVisible={chatVisible}
+          setChatVisible={setChatVisible}
+          messages={messages}
+          chatInput={chatInput}
+          setChatInput={setChatInput}
+          chatInputRef={chatInputRef}
+          session={session}
+          link={link}
+          chatStudentNameRef={chatStudentNameRef}
+          user={user}
+          guest={guest}
+          socketRef={socketRef}
+          setMessages={setMessages}
+        />
       </div>
 
       {/* (video placeholder moved into participants sidebar; fixed duplicate removed) */}
@@ -2247,7 +2654,7 @@ function SessionPageContent() {
       {/* Bottom control strip with camera/mic buttons */}
       <div className="fixed left-0 right-0 bottom-0 z-50">
         <div className="mx-auto max-w-4xl px-4">
-          <div className="rounded-t-xl bg-slate-900/70 border-t border-white/5 py-3 shadow-xl backdrop-blur-sm">
+          <div className="rounded-t-xl bg-slate-100/90 dark:bg-slate-900/70 border-t border-slate-300/50 dark:border-white/5 py-3 shadow-xl backdrop-blur-sm">
             <div className="flex items-center justify-center gap-4">
               {/* Camera toggle */}
               <CameraButton 
@@ -2265,32 +2672,11 @@ function SessionPageContent() {
               
               {/* Connection status indicator */}
               {isConnecting && (
-                <div className="ml-4 flex items-center gap-2 text-sm text-slate-300">
+                <div className="ml-4 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                   <div className="h-2 w-2 animate-pulse rounded-full bg-primary" />
                   <span>Connecting...</span>
                 </div>
               )}
-              {/* Quick debug button logs senders/transceivers and local tracks to console */}
-              <button
-                onClick={async () => {
-                  try {
-                    const pc = peerConnectionRef.current;
-                    const senders = pc && pc.getSenders ? pc.getSenders().map(s => ({ id: s && s.track ? s.track.id : null, kind: s && s.track ? s.track.kind : null, readyState: s && s.track ? s.track.readyState : null })) : [];
-                    const transceivers = pc && pc.getTransceivers ? pc.getTransceivers().map(t => ({ mid: t.mid, direction: t.direction, senderKind: t.sender && t.sender.track ? t.sender.track.kind : null, senderReadyState: t.sender && t.sender.track ? t.sender.track.readyState : null })) : [];
-                    const local = localStream ? { audio: localStream.getAudioTracks().map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })), video: localStream.getVideoTracks().map(t => ({ id: t.id, enabled: t.enabled, readyState: t.readyState })) } : { audio: [], video: [] };
-                    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-                    console.group('WebRTC Debug');
-                    console.groupEnd();
-                    alert(`Debug info logged to console. senders=${senders.length}, transceivers=${transceivers.length}, localVideo=${local.video.length}`);
-                  } catch (e) {
-                    alert('Failed to gather debug info: ' + (e && e.message));
-                  }
-                }}
-                className="ml-3 rounded px-3 py-2 text-xs bg-white/5 text-white"
-                title="Log WebRTC debug info to console"
-              >
-                Debug
-              </button>
             </div>
           </div>
         </div>

@@ -1,9 +1,49 @@
+/* Fancy display font for headings - @import must be at the top */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* Theme CSS Variables */
+  [data-theme='dark'] {
+    --bg-primary: 2 6 23; /* slate-950 */
+    --bg-secondary: 15 23 42; /* slate-900 */
+    --text-primary: 241 245 249; /* slate-100 */
+    --text-secondary: 203 213 225; /* slate-300 */
+    --border-color: 255 255 255 / 0.1;
+  }
+
+  [data-theme='light'] {
+    --bg-primary: 248 250 252; /* slate-50 */
+    --bg-secondary: 241 245 249; /* slate-100 */
+    --text-primary: 15 23 42; /* slate-900 */
+    --text-secondary: 71 85 105; /* slate-600 */
+    --border-color: 0 0 0 / 0.1;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  [data-theme='light'] html {
+    color-scheme: light;
+  }
+}
 
 @layer utilities {
   .mirror {
     transform: scaleX(-1);
   }
 }
+
+@layer components {
+  .font-fancy {
+    font-family: 'Playfair Display', ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+    letter-spacing: 0.03em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
