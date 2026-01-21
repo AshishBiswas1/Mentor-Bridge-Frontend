@@ -605,35 +605,41 @@ function SessionPageContent() {
 
   const startCall = async () => {
     try {
+      console.log('📞 Starting WebRTC call...');
       setIsConnecting(true);
       
       // Use activeStreamRef for most reliable current stream
       let stream = activeStreamRef.current || localStream;
       if (!stream) {
+        console.log('📞 No stream available, initializing media...');
         stream = await initializeMedia();
       }
       if (!stream) {
+        console.error('❌ Failed to get media stream');
         setIsConnecting(false);
         return;
       }
 
+      console.log('📞 Creating peer connection...');
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
 
       // Add mentor's local tracks to peer connection
-      
+      console.log('📞 Adding local tracks to peer connection...');
       stream.getTracks().forEach(track => {
         try {
           // Ensure track is enabled and check muted state
           track.enabled = true;
+          console.log(`📞 Adding ${track.kind} track:`, { enabled: track.enabled, readyState: track.readyState });
           
           pc.addTrack(track, stream);
         } catch (e) {
-          // Failed to add track
+          console.error('❌ Failed to add track:', e);
         }
       });
 
       // Create and send offer
+      console.log('📞 Creating offer...');
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       isNegotiatingRef.current = true;
@@ -641,14 +647,21 @@ function SessionPageContent() {
       // Prefer signaling namespace for multi-room support
       try {
         const room = (session && (session.link || session.id)) || link;
+        console.log('📞 Sending offer to room:', room);
         if (signalSocketRef.current && signalSocketRef.current.connected) {
           signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
+          console.log('✅ Offer sent via signaling socket');
         } else if (socketRef.current) {
           socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
+          console.log('✅ Offer sent via main socket');
+        } else {
+          console.error('❌ No socket available to send offer');
         }
-      } catch (e) { /* Failed to send offer */ }
+      } catch (e) { 
+        console.error('❌ Failed to send offer:', e);
+      }
     } catch (error) {
-      console.error('Error starting call:', error);
+      console.error('❌ Error starting call:', error);
       setIsConnecting(false);
       isNegotiatingRef.current = false;
     }
@@ -1627,23 +1640,38 @@ function SessionPageContent() {
       s.on('answer', handleWebRTCAnswer);
       s.on('ice-candidate', handleICECandidate);
       
-      // When another participant joins, mentor should initiate the call immediately
+      // When another participant joins, initiate the call if we don't have a connection
       s.on('participant-ready', async (payload) => {
+        console.log('📡 Received participant-ready:', payload);
         
         try {
           const localIsMentor = isMentorRef.current;
           const pc = peerConnectionRef.current;
           const isNeg = isNegotiatingRef.current;
 
-          if (localIsMentor && !pc && !isNeg) {
+          console.log('📡 Participant-ready check:', { 
+            localIsMentor, 
+            hasPeerConnection: !!pc, 
+            isNegotiating: isNeg,
+            payloadRole: payload?.role 
+          });
+
+          // Either mentor initiates when student is ready, OR student initiates when mentor is ready
+          // But only if we don't already have a peer connection
+          if (!pc && !isNeg) {
             // Ensure media is ready before starting call - use activeStreamRef for consistency
             if (!activeStreamRef.current) {
+              console.log('📡 Initializing media before call...');
               await initializeMedia();
             }
+            
+            console.log('📡 Starting call...');
             startCall();
+          } else {
+            console.log('📡 Skipping call start - already connected or negotiating');
           }
         } catch (e) {
-          // Error in participant-ready
+          console.error('❌ Error in participant-ready:', e);
         }
       });
     }
@@ -1748,9 +1776,31 @@ function SessionPageContent() {
       const localIsMentor = isMentorRef.current;
       const room = (session && (session.link || session.id)) || link;
       
-      if (signalSocketRef.current && signalSocketRef.current.connected && room) {
-        // Emit participant-ready so other side knows to initiate/accept connections
-        signalSocketRef.current.emit('participant-ready', { room, role: localIsMentor ? 'mentor' : 'student' });
+      // Wait for signaling socket to be connected before emitting
+      const emitParticipantReady = () => {
+        if (signalSocketRef.current && signalSocketRef.current.connected && room) {
+          console.log('📡 Emitting participant-ready:', { room, role: localIsMentor ? 'mentor' : 'student' });
+          signalSocketRef.current.emit('participant-ready', { room, role: localIsMentor ? 'mentor' : 'student' });
+          return true;
+        }
+        return false;
+      };
+
+      // Try immediately first
+      if (!emitParticipantReady()) {
+        // If not connected, wait and retry
+        console.log('⏳ Signaling socket not ready, waiting...');
+        let attempts = 0;
+        const maxAttempts = 10;
+        const retryInterval = setInterval(() => {
+          attempts++;
+          if (emitParticipantReady() || attempts >= maxAttempts) {
+            clearInterval(retryInterval);
+            if (attempts >= maxAttempts) {
+              console.warn('⚠️ Failed to emit participant-ready after', maxAttempts, 'attempts');
+            }
+          }
+        }, 300);
       }
     };
 
