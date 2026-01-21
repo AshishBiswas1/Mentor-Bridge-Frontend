@@ -36,7 +36,7 @@ export default function ResetPasswordPage() {
       // ignore
     }
 
-    // Fallback: try hash fragment (some providers return token in fragment)
+    // Fallback: try hash fragment (Supabase returns token in fragment)
     const hash = window.location.hash || '';
     if (!hash) {
       setTokenChecked(true);
@@ -45,8 +45,12 @@ export default function ResetPasswordPage() {
 
     try {
       const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+      // Supabase uses 'access_token' and includes 'type=recovery' for password reset
+      const tokenType = params.get('type');
       const t = params.get('access_token') || params.get('token') || params.get('accessToken');
-      if (t) {
+      
+      // Only accept token if it's a recovery type (password reset)
+      if (t && (tokenType === 'recovery' || !tokenType)) {
         setToken(t);
         // remove hash from URL to keep it clean
         try {
