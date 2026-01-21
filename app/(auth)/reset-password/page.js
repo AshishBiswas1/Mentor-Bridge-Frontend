@@ -23,45 +23,60 @@ export default function ResetPasswordPage() {
       return;
     }
 
+    console.log('Full URL:', window.location.href);
+    console.log('Search params:', window.location.search);
+    console.log('Hash:', window.location.hash);
+
     // Try query params first
     try {
       const qp = new URLSearchParams(window.location.search || '');
       const t = qp.get('access_token') || qp.get('token') || qp.get('accessToken');
       if (t) {
+        console.log('Token found in query params:', t.substring(0, 20) + '...');
         setToken(t);
         setTokenChecked(true);
         return;
       }
     } catch (e) {
-      // ignore
+      console.error('Error parsing query params:', e);
     }
 
     // Fallback: try hash fragment (Supabase returns token in fragment)
     const hash = window.location.hash || '';
     if (!hash) {
+      console.log('No hash fragment found');
       setTokenChecked(true);
       return;
     }
 
     try {
-      const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+      const hashString = hash.startsWith('#') ? hash.slice(1) : hash;
+      console.log('Hash string:', hashString);
+      const params = new URLSearchParams(hashString);
+      
       // Supabase uses 'access_token' and includes 'type=recovery' for password reset
       const tokenType = params.get('type');
       const t = params.get('access_token') || params.get('token') || params.get('accessToken');
       
-      // Only accept token if it's a recovery type (password reset)
-      if (t && (tokenType === 'recovery' || !tokenType)) {
+      console.log('Token type:', tokenType);
+      console.log('Token found in hash:', t ? t.substring(0, 20) + '...' : 'null');
+      
+      // Accept token if found (removed type check for now to debug)
+      if (t) {
         setToken(t);
+        console.log('Token set successfully');
         // remove hash from URL to keep it clean
         try {
           const newUrl = window.location.pathname + window.location.search;
           window.history.replaceState({}, document.title, newUrl);
         } catch (e) {
-          // ignore
+          console.error('Error updating URL:', e);
         }
+      } else {
+        console.log('No token found in hash params');
       }
     } catch (e) {
-      // ignore parse errors
+      console.error('Error parsing hash fragment:', e);
     } finally {
       setTokenChecked(true);
     }
