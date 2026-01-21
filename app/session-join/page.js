@@ -59,8 +59,7 @@ function SessionJoinContent() {
       console.log('Join response:', { status: res.status, data: json });
       
       if (!res.ok) {
-        const errorMsg = json?.message || json?.error || 'Failed to join session';
-        setError(errorMsg);
+        setError(json?.message || json?.error || 'Failed to join session');
         setIsSubmitting(false);
         return;
       }
@@ -92,7 +91,7 @@ function SessionJoinContent() {
         router.push(`/session?link=${encoded}`);
       }
     } catch (e) {
-      setError(e?.message || 'Network error');
+      setError(e?.message || 'Network error. Please check your connection and try again.');
       setIsSubmitting(false);
     }
   };

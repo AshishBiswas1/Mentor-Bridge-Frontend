@@ -132,12 +132,12 @@ export default function ResetPasswordPage() {
 
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(json?.error || json?.message || 'Failed to reset password.');
+        setError(json?.message || json?.error || 'Failed to reset password.');
       } else {
         setSuccess(true);
       }
     } catch (err) {
-      setError('Failed to reset password. Please try again.');
+      setError(err?.message || 'Network error. Please check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }
