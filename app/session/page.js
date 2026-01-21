@@ -914,90 +914,98 @@ function SessionPageContent() {
     const pc = peerConnectionRef.current;
     
     if (micEnabled) {
-      // Turn mic OFF - stop audio track and replace with null in peer connection
+      // Turn mic OFF - just disable the track, don't stop it (to avoid permission issues)
       try {
         const currentStream = activeStreamRef.current || localStream;
         if (currentStream) {
-          // Stop ALL audio tracks to fully release microphone hardware
           const audioTracks = currentStream.getAudioTracks();
           audioTracks.forEach(track => {
-            track.stop(); // This releases the hardware
-            track.enabled = false;
+            track.enabled = false; // Just disable, don't stop the track
           });
-            
-            // Replace with null in peer connection to stop sending audio
-            if (pc) {
-              const senders = pc.getSenders ? pc.getSenders() : [];
-              const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-              if (audioSender && typeof audioSender.replaceTrack === 'function') {
-                await audioSender.replaceTrack(null);
-              }
-            }
-            
-            // Create new stream without audio for consistency
-            const videoTracks = currentStream.getVideoTracks();
-            const newStream = new MediaStream([...videoTracks]);
-            activeStreamRef.current = newStream;
-            setLocalStream(newStream);
-            setMicEnabled(false);
+          setMicEnabled(false);
         }
       } catch (e) {
         console.error('Error muting mic:', e);
       }
     } else {
-      // Turn mic ON - acquire new audio track and replace in peer connection
+      // Turn mic ON - re-enable existing track or acquire new one
       try {
-        // Acquire fresh microphone stream
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        const newAudioTrack = audioStream.getAudioTracks()[0];
-
-        if (!newAudioTrack) {
-          throw new Error('No audio track obtained from microphone');
-        }
-
-        // Create new stream with audio + existing video tracks
         const currentStream = activeStreamRef.current || localStream;
-        const videoTracks = currentStream ? currentStream.getVideoTracks() : [];
-        const newStream = new MediaStream([...videoTracks, newAudioTrack]);
+        const existingAudioTracks = currentStream ? currentStream.getAudioTracks() : [];
         
-        // Update both ref and state
-        activeStreamRef.current = newStream;
-        setLocalStream(newStream);
-
-        // Replace track in peer connection (no renegotiation needed with replaceTrack)
-        if (pc) {
-          const senders = pc.getSenders ? pc.getSenders() : [];
-          // Find audio sender by checking track kind or by checking the transceiver media type
-          const audioSender = senders.find(s => {
-            if (s.track && s.track.kind === 'audio') return true;
-            // Check transceiver to see if this sender is for audio (even if track is null)
-            const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
-            const transceiver = transceivers.find(t => t.sender === s);
-            return transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === 'audio';
+        // Check if we have an existing audio track we can re-enable
+        if (existingAudioTracks.length > 0) {
+          // Re-enable existing track
+          existingAudioTracks.forEach(track => {
+            track.enabled = true;
           });
+          setMicEnabled(true);
+        } else {
+          // No existing audio track - need to acquire new one
+          try {
+            const audioStream = await navigator.mediaDevices.getUserMedia({ 
+              audio: { 
+                echoCancellation: true, 
+                noiseSuppression: true,
+                autoGainControl: true 
+              }, 
+              video: false 
+            });
+            const newAudioTrack = audioStream.getAudioTracks()[0];
 
-          if (audioSender && typeof audioSender.replaceTrack === 'function') {
-            // replaceTrack doesn't require renegotiation
-            await audioSender.replaceTrack(newAudioTrack);
-          } else {
-            // Fallback: add track if no sender exists (requires renegotiation)
-            pc.addTrack(newAudioTrack, localStream || new MediaStream([newAudioTrack]));
+            if (!newAudioTrack) {
+              throw new Error('No audio track obtained from microphone');
+            }
 
-            if (!isNegotiatingRef.current) {
-              isNegotiatingRef.current = true;
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              const room = (session && (session.link || session.id)) || link;
-              if (signalSocketRef.current && signalSocketRef.current.connected) {
-                signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
-              } else if (socketRef.current) {
-                socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
+            newAudioTrack.enabled = true;
+
+            // Create new stream with audio + existing video tracks
+            const videoTracks = currentStream ? currentStream.getVideoTracks() : [];
+            const newStream = new MediaStream([...videoTracks, newAudioTrack]);
+            
+            // Update both ref and state
+            activeStreamRef.current = newStream;
+            setLocalStream(newStream);
+
+            // Add or replace track in peer connection
+            if (pc) {
+              const senders = pc.getSenders ? pc.getSenders() : [];
+              const audioSender = senders.find(s => {
+                if (s.track && s.track.kind === 'audio') return true;
+                // Check transceiver to see if this sender is for audio (even if track is null)
+                const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+                const transceiver = transceivers.find(t => t.sender === s);
+                return transceiver && transceiver.receiver && transceiver.receiver.track && transceiver.receiver.track.kind === 'audio';
+              });
+
+              if (audioSender && typeof audioSender.replaceTrack === 'function') {
+                // replaceTrack doesn't require renegotiation
+                await audioSender.replaceTrack(newAudioTrack);
+              } else {
+                // Add track if no sender exists (requires renegotiation)
+                pc.addTrack(newAudioTrack, newStream);
+
+                if (!isNegotiatingRef.current) {
+                  isNegotiatingRef.current = true;
+                  const offer = await pc.createOffer();
+                  await pc.setLocalDescription(offer);
+                  const room = (session && (session.link || session.id)) || link;
+                  if (signalSocketRef.current && signalSocketRef.current.connected) {
+                    signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
+                  } else if (socketRef.current) {
+                    socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
+                  }
+                }
               }
             }
+
+            setMicEnabled(true);
+          } catch (permissionError) {
+            console.error('Microphone permission denied:', permissionError);
+            alert('Microphone access denied. Please check your browser permissions and allow microphone access.');
+            setMicEnabled(false);
           }
         }
-
-        setMicEnabled(true);
 
       } catch (e) {
         console.error('Error enabling mic:', e);
