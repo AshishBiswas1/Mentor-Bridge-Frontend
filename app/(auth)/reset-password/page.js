@@ -26,11 +26,24 @@ export default function ResetPasswordPage() {
 
     hasProcessedToken.current = true;
 
+    // First, check if we have a token stored in sessionStorage
+    try {
+      const storedToken = sessionStorage.getItem('reset_password_token');
+      if (storedToken) {
+        setToken(storedToken);
+        setTokenChecked(true);
+        return;
+      }
+    } catch (e) {
+      // ignore
+    }
+
     // Try query params first
     try {
       const qp = new URLSearchParams(window.location.search || '');
       const t = qp.get('access_token') || qp.get('token') || qp.get('accessToken');
       if (t) {
+        sessionStorage.setItem('reset_password_token', t);
         setToken(t);
         setTokenChecked(true);
         return;
@@ -56,7 +69,9 @@ export default function ResetPasswordPage() {
       
       // Accept token if found and type is recovery
       if (t && tokenType === 'recovery') {
+        sessionStorage.setItem('reset_password_token', t);
         setToken(t);
+        setTokenChecked(true);
         // remove hash from URL to keep it clean
         try {
           const newUrl = window.location.pathname + window.location.search;
@@ -64,10 +79,11 @@ export default function ResetPasswordPage() {
         } catch (e) {
           // ignore
         }
+      } else {
+        setTokenChecked(true);
       }
     } catch (e) {
       // ignore parse errors
-    } finally {
       setTokenChecked(true);
     }
   }, []);
@@ -143,6 +159,12 @@ export default function ResetPasswordPage() {
       if (!res.ok) {
         setError(json?.message || json?.error || 'Failed to reset password.');
       } else {
+        // Clear stored token on success
+        try {
+          sessionStorage.removeItem('reset_password_token');
+        } catch (e) {
+          // ignore
+        }
         setSuccess(true);
       }
     } catch (err) {
