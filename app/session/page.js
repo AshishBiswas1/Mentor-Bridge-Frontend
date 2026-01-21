@@ -498,14 +498,14 @@ function SessionPageContent() {
         const video = localVideoRef.current;
         video.srcObject = stream;
         video.onloadedmetadata = () => {
-          video.play().catch(e => console.log('Local video autoplay failed:', e));
+          video.play().catch(e => {});
         };
       }
       
       isInitializingRef.current = false;
       return stream;
     } catch (error) {
-      console.error('Error accessing media devices:', error);
+      // Error accessing media devices
       // Try audio only if video fails
       try {
         const audioStream = await navigator.mediaDevices.getUserMedia({
@@ -521,7 +521,7 @@ function SessionPageContent() {
         isInitializingRef.current = false;
         return audioStream;
       } catch (audioError) {
-        console.error('Error accessing audio:', audioError);
+        // Error accessing audio
         isInitializingRef.current = false;
         return null;
       }
@@ -564,23 +564,11 @@ function SessionPageContent() {
 
     pc.ontrack = (event) => {
       const trackKind = event.track ? event.track.kind : 'unknown';
-      console.log(`📺 Received ${trackKind} track:`, {
-        enabled: event.track?.enabled,
-        muted: event.track?.muted,
-        readyState: event.track?.readyState
-      });
       
       if (event.streams && event.streams[0]) {
         const tracks = event.streams[0].getTracks();
-        console.log('📺 Remote stream tracks:', tracks.map(t => ({
-          kind: t.kind,
-          enabled: t.enabled,
-          muted: t.muted,
-          readyState: t.readyState
-        })));
         setRemoteStream(event.streams[0]);
       } else if (event.track) {
-        console.log('📺 Creating new MediaStream from single track');
         const s = new MediaStream([event.track]);
         setRemoteStream(s);
       }
@@ -605,41 +593,33 @@ function SessionPageContent() {
 
   const startCall = async () => {
     try {
-      console.log('📞 Starting WebRTC call...');
       setIsConnecting(true);
       
       // Use activeStreamRef for most reliable current stream
       let stream = activeStreamRef.current || localStream;
       if (!stream) {
-        console.log('📞 No stream available, initializing media...');
         stream = await initializeMedia();
       }
       if (!stream) {
-        console.error('❌ Failed to get media stream');
         setIsConnecting(false);
         return;
       }
 
-      console.log('📞 Creating peer connection...');
       const pc = createPeerConnection();
       peerConnectionRef.current = pc;
 
       // Add mentor's local tracks to peer connection
-      console.log('📞 Adding local tracks to peer connection...');
       stream.getTracks().forEach(track => {
         try {
           // Ensure track is enabled and check muted state
           track.enabled = true;
-          console.log(`📞 Adding ${track.kind} track:`, { enabled: track.enabled, readyState: track.readyState });
-          
           pc.addTrack(track, stream);
         } catch (e) {
-          console.error('❌ Failed to add track:', e);
+          // Failed to add track
         }
       });
 
       // Create and send offer
-      console.log('📞 Creating offer...');
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       isNegotiatingRef.current = true;
@@ -647,21 +627,15 @@ function SessionPageContent() {
       // Prefer signaling namespace for multi-room support
       try {
         const room = (session && (session.link || session.id)) || link;
-        console.log('📞 Sending offer to room:', room);
         if (signalSocketRef.current && signalSocketRef.current.connected) {
           signalSocketRef.current.emit('offer', { room, link, offer: pc.localDescription });
-          console.log('✅ Offer sent via signaling socket');
         } else if (socketRef.current) {
           socketRef.current.emit('webrtc-offer', { link, offer: pc.localDescription });
-          console.log('✅ Offer sent via main socket');
-        } else {
-          console.error('❌ No socket available to send offer');
         }
       } catch (e) { 
-        console.error('❌ Failed to send offer:', e);
+        // Failed to send offer
       }
     } catch (error) {
-      console.error('❌ Error starting call:', error);
       setIsConnecting(false);
       isNegotiatingRef.current = false;
     }
@@ -730,7 +704,6 @@ function SessionPageContent() {
         }
       }
     } catch (error) {
-      console.error('Error handling WebRTC offer:', error);
       setIsConnecting(false);
       isNegotiatingRef.current = false;
     }
@@ -778,7 +751,7 @@ function SessionPageContent() {
       
       // pc.ontrack will fire automatically - no need to manually check for tracks
     } catch (error) {
-      console.error('Error handling WebRTC answer:', error);
+      // Error handling WebRTC answer
     }
   };
 
@@ -800,7 +773,7 @@ function SessionPageContent() {
 
       await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
     } catch (error) {
-      console.error('Error handling ICE candidate:', error);
+      // Error handling ICE candidate
     }
   };
 
@@ -928,7 +901,7 @@ function SessionPageContent() {
         setCameraEnabled(true);
 
       } catch (error) {
-        console.error('Error restarting camera:', error);
+        // Error restarting camera
         alert('Failed to access camera. Please check permissions.');
       }
     }
@@ -949,7 +922,7 @@ function SessionPageContent() {
           setMicEnabled(false);
         }
       } catch (e) {
-        console.error('Error muting mic:', e);
+        // Error muting mic
       }
     } else {
       // Turn mic ON - re-enable existing track or acquire new one
@@ -1025,14 +998,13 @@ function SessionPageContent() {
 
             setMicEnabled(true);
           } catch (permissionError) {
-            console.error('Microphone permission denied:', permissionError);
             alert('Microphone access denied. Please check your browser permissions and allow microphone access.');
             setMicEnabled(false);
           }
         }
 
       } catch (e) {
-        console.error('Error enabling mic:', e);
+        // Error enabling mic
         alert('Failed to access microphone. Please check permissions.');
       }
     }
@@ -1336,7 +1308,7 @@ function SessionPageContent() {
         try {
           cleanupWebRTC();
         } catch (e) {
-          console.error('Error cleaning up WebRTC on participant leave:', e);
+          // Error cleaning up WebRTC
         }
       } catch (e) {}
     });
@@ -1398,7 +1370,7 @@ function SessionPageContent() {
           try {
             await startCall();
           } catch (e) {
-            console.error('Failed to initiate call to rejoined mentor:', e);
+            // Failed to initiate call
           }
         }
       } catch (e) {}
@@ -1435,11 +1407,11 @@ function SessionPageContent() {
               try {
                 startCall();
               } catch (e) {
-                console.error('Error starting call after participant joined:', e);
+                // Error starting call
               }
             }, 500);
           } catch (e) {
-            console.error('Error handling participant rejoin:', e);
+            // Error handling rejoin
           }
         }
 
@@ -1642,36 +1614,23 @@ function SessionPageContent() {
       
       // When another participant joins, initiate the call if we don't have a connection
       s.on('participant-ready', async (payload) => {
-        console.log('📡 Received participant-ready:', payload);
-        
         try {
           const localIsMentor = isMentorRef.current;
           const pc = peerConnectionRef.current;
           const isNeg = isNegotiatingRef.current;
-
-          console.log('📡 Participant-ready check:', { 
-            localIsMentor, 
-            hasPeerConnection: !!pc, 
-            isNegotiating: isNeg,
-            payloadRole: payload?.role 
-          });
 
           // Either mentor initiates when student is ready, OR student initiates when mentor is ready
           // But only if we don't already have a peer connection
           if (!pc && !isNeg) {
             // Ensure media is ready before starting call - use activeStreamRef for consistency
             if (!activeStreamRef.current) {
-              console.log('📡 Initializing media before call...');
               await initializeMedia();
             }
             
-            console.log('📡 Starting call...');
             startCall();
-          } else {
-            console.log('📡 Skipping call start - already connected or negotiating');
           }
         } catch (e) {
-          console.error('❌ Error in participant-ready:', e);
+          // Error in participant-ready
         }
       });
     }
@@ -1767,7 +1726,7 @@ function SessionPageContent() {
         try {
           await initializeMedia();
         } catch (err) {
-          console.error('Failed to initialize media:', err);
+          // Failed to initialize media
           return;
         }
       }
@@ -1779,7 +1738,6 @@ function SessionPageContent() {
       // Wait for signaling socket to be connected before emitting
       const emitParticipantReady = () => {
         if (signalSocketRef.current && signalSocketRef.current.connected && room) {
-          console.log('📡 Emitting participant-ready:', { room, role: localIsMentor ? 'mentor' : 'student' });
           signalSocketRef.current.emit('participant-ready', { room, role: localIsMentor ? 'mentor' : 'student' });
           return true;
         }
@@ -1789,16 +1747,12 @@ function SessionPageContent() {
       // Try immediately first
       if (!emitParticipantReady()) {
         // If not connected, wait and retry
-        console.log('⏳ Signaling socket not ready, waiting...');
         let attempts = 0;
         const maxAttempts = 10;
         const retryInterval = setInterval(() => {
           attempts++;
           if (emitParticipantReady() || attempts >= maxAttempts) {
             clearInterval(retryInterval);
-            if (attempts >= maxAttempts) {
-              console.warn('⚠️ Failed to emit participant-ready after', maxAttempts, 'attempts');
-            }
           }
         }, 300);
       }
@@ -1831,7 +1785,7 @@ function SessionPageContent() {
       video.srcObject = localStream;
       // Use onloadedmetadata to avoid AbortError
       video.onloadedmetadata = () => {
-        video.play().catch(e => console.log('Local video play failed:', e));
+        video.play().catch(e => {});
       };
     }
   }, [localStream]);
@@ -1844,12 +1798,6 @@ function SessionPageContent() {
       if (remoteStream) {
         // Diagnostic: check track states
         const tracks = remoteStream.getTracks();
-        console.log('🔊 Setting remote stream with tracks:', tracks.map(t => ({
-          kind: t.kind,
-          enabled: t.enabled,
-          muted: t.muted,
-          readyState: t.readyState
-        })));
         
         // Add event listeners to tracks for when they end (camera/mic turned off)
         tracks.forEach(track => {
@@ -1859,7 +1807,7 @@ function SessionPageContent() {
               if (remoteVideoRef.current) {
                 const blackStream = createBlackVideoStream();
                 remoteVideoRef.current.srcObject = blackStream;
-                remoteVideoRef.current.play().catch(err => console.error('Error playing black stream:', err));
+                remoteVideoRef.current.play().catch(err => {});
               }
             };
           }
@@ -1875,35 +1823,30 @@ function SessionPageContent() {
           
           // Play with audio - this may require user interaction in some browsers
           video.play().then(() => {
-            console.log('✅ Remote video playing with audio');
             // Double check audio is not muted after play starts
             if (video.muted) {
-              console.warn('⚠️ Video was muted after play, unmuting...');
               video.muted = false;
             }
           }).catch(err => {
-            console.error('❌ Remote video play failed:', err.message);
             // If autoplay with audio fails, try muted first then unmute
             if (err.name === 'NotAllowedError') {
-              console.log('🔄 Trying muted autoplay first...');
               video.muted = true;
               video.play().then(() => {
                 // Unmute after successful muted play
                 setTimeout(() => {
                   video.muted = false;
-                  console.log('✅ Unmuted after successful play');
                 }, 100);
-              }).catch(e => console.error('❌ Even muted play failed:', e));
+              }).catch(e => {});
             }
           });
         } catch (e) {
-          console.error('❌ Error in remoteStream useEffect:', e.message);
+          // Error in remoteStream useEffect
         }
       } else {
         // No remote stream - show black canvas instead of frozen frame
         const blackStream = createBlackVideoStream();
         video.srcObject = blackStream;
-        video.play().catch(err => console.error('Error playing black stream:', err));
+        video.play().catch(err => {});
       }
     }
   }, [remoteStream]);
