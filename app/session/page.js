@@ -564,12 +564,23 @@ function SessionPageContent() {
 
     pc.ontrack = (event) => {
       const trackKind = event.track ? event.track.kind : 'unknown';
-      
+      console.log(`📺 Received ${trackKind} track:`, {
+        enabled: event.track?.enabled,
+        muted: event.track?.muted,
+        readyState: event.track?.readyState
+      });
       
       if (event.streams && event.streams[0]) {
         const tracks = event.streams[0].getTracks();
+        console.log('📺 Remote stream tracks:', tracks.map(t => ({
+          kind: t.kind,
+          enabled: t.enabled,
+          muted: t.muted,
+          readyState: t.readyState
+        })));
         setRemoteStream(event.streams[0]);
       } else if (event.track) {
+        console.log('📺 Creating new MediaStream from single track');
         const s = new MediaStream([event.track]);
         setRemoteStream(s);
       }
@@ -1783,6 +1794,12 @@ function SessionPageContent() {
       if (remoteStream) {
         // Diagnostic: check track states
         const tracks = remoteStream.getTracks();
+        console.log('🔊 Setting remote stream with tracks:', tracks.map(t => ({
+          kind: t.kind,
+          enabled: t.enabled,
+          muted: t.muted,
+          readyState: t.readyState
+        })));
         
         // Add event listeners to tracks for when they end (camera/mic turned off)
         tracks.forEach(track => {
@@ -1799,13 +1816,35 @@ function SessionPageContent() {
         });
         
         try {
-          // Apply muted state and set stream
-          video.muted = remoteMuted;
+          // IMPORTANT: Set muted to false to allow audio playback
+          video.muted = false;
           video.srcObject = remoteStream;
           
-          // Play immediately without waiting for metadata
-          video.play().catch(err => {
+          // Explicitly set volume to maximum
+          video.volume = 1.0;
+          
+          // Play with audio - this may require user interaction in some browsers
+          video.play().then(() => {
+            console.log('✅ Remote video playing with audio');
+            // Double check audio is not muted after play starts
+            if (video.muted) {
+              console.warn('⚠️ Video was muted after play, unmuting...');
+              video.muted = false;
+            }
+          }).catch(err => {
             console.error('❌ Remote video play failed:', err.message);
+            // If autoplay with audio fails, try muted first then unmute
+            if (err.name === 'NotAllowedError') {
+              console.log('🔄 Trying muted autoplay first...');
+              video.muted = true;
+              video.play().then(() => {
+                // Unmute after successful muted play
+                setTimeout(() => {
+                  video.muted = false;
+                  console.log('✅ Unmuted after successful play');
+                }, 100);
+              }).catch(e => console.error('❌ Even muted play failed:', e));
+            }
           });
         } catch (e) {
           console.error('❌ Error in remoteStream useEffect:', e.message);
@@ -1817,7 +1856,7 @@ function SessionPageContent() {
         video.play().catch(err => console.error('Error playing black stream:', err));
       }
     }
-  }, [remoteStream, remoteMuted]);
+  }, [remoteStream]);
 
   // ensure participant count is decremented on unload/unmount
   useEffect(() => {
@@ -2520,7 +2559,6 @@ function SessionPageContent() {
                         ref={remoteVideoRef}
                         autoPlay
                         playsInline
-                        muted={remoteMuted}
                         className="h-full w-full object-cover"
                       />
                     ) : (
